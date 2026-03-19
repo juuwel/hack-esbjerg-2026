@@ -8,8 +8,7 @@
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:8080
-      # Uncomment and adapt if your API reads an OpenSearch URL from env
-      # - OPENSEARCH__URL=http://opensearch:9200
+      - OPENSEARCH__URL=http://opensearch:9200
     depends_on:
       opensearch:
         condition: service_healthy

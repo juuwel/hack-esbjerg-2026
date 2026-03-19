@@ -13,4 +13,14 @@
       </Content>
     </ItemGroup>
 
+    <ItemGroup>
+      <PackageReference Include="OpenSearch.Client" Version="1.5.0" />
+      <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
+      <PackageReference Include="Scalar.AspNetCore" Version="2.3.6" />
+    </ItemGroup>
+
+    <PropertyGroup>
+      <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    </PropertyGroup>
+
 </Project>
