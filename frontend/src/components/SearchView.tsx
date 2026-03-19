@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArchiveDocument, SearchResult } from "../types";
 import ArchiveCard from "./ArchiveCard";
 
+const PAGE_SIZE = 20;
+
 interface Props {
   // New items pushed in from the capture panel appear at the top
   newItems: ArchiveDocument[];
@@ -12,56 +14,92 @@ export default function SearchView({ newItems, onDeleted }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ArchiveDocument[]>([]);
   const [total, setTotal] = useState<number | null>(null);
+  const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([
+    undefined,
+  ]); // stack of cursors; index 0 = page 1
+  const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const doSearch = useCallback(async (q: string) => {
-    if (!q.trim()) {
-      setResults([]);
-      setTotal(null);
-      setSearched(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await fetch(
-        `/api/archive/search?q=${encodeURIComponent(q)}&size=20`,
-      );
-      if (!res.ok) throw new Error("Search failed");
-      const data: SearchResult = await res.json();
-      setResults(data.hits ?? []);
-      setTotal(data.total ?? 0);
-      setSearched(true);
-    } catch {
-      setResults([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const doSearch = useCallback(
+    async (q: string, cursor?: string, newStack?: (string | undefined)[]) => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ size: String(PAGE_SIZE) });
+        if (q.trim()) params.set("q", q.trim());
+        if (cursor) params.set("cursor", cursor);
+        const res = await fetch(`/api/archive/search?${params}`);
+        if (!res.ok) throw new Error("Search failed");
+        const data: SearchResult = await res.json();
+        setResults(data.hits ?? []);
+        setTotal(data.total ?? 0);
+        // Build the cursor stack for this query if provided, else keep current
+        if (newStack !== undefined) {
+          // Append next cursor at the end so we can navigate forward
+          setCursorStack([...newStack, data.nextCursor]);
+          setPageIndex(newStack.length - 1);
+        }
+      } catch {
+        setResults([]);
+        setTotal(null);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
+
+  const resetAndSearch = useCallback(
+    (q: string) => {
+      doSearch(q, undefined, [undefined]);
+    },
+    [doSearch],
+  );
+
+  // Load all documents on mount
+  useEffect(() => {
+    resetAndSearch("");
+  }, [resetAndSearch]);
 
   // Debounced search as user types
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setQuery(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => doSearch(val), 400);
+    debounceRef.current = setTimeout(() => resetAndSearch(val), 400);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    doSearch(query);
+    resetAndSearch(query);
   };
 
-  // When a new item is captured keep search results in sync
+  // Refresh first page when a new item is captured
   useEffect(() => {
-    if (searched && query.trim()) doSearch(query);
+    if (newItems.length > 0) resetAndSearch(query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newItems]);
 
-  // Combine: newly archived items float to the top when no active search
-  const displayList = searched ? results : newItems;
+  const handleNext = () => {
+    const nextCursor = cursorStack[pageIndex + 1];
+    if (!nextCursor) return;
+    const newStack = cursorStack.slice(0, pageIndex + 2);
+    setPageIndex(pageIndex + 1);
+    doSearch(query, nextCursor, newStack);
+  };
+
+  const handlePrev = () => {
+    if (pageIndex === 0) return;
+    const prevCursor = cursorStack[pageIndex - 1];
+    const newStack = cursorStack.slice(0, pageIndex);
+    setPageIndex(pageIndex - 1);
+    doSearch(query, prevCursor, newStack);
+  };
+
+  const hasNext = !!cursorStack[pageIndex + 1];
+  const hasPrev = pageIndex > 0;
+  const totalPages = total !== null ? Math.ceil(total / PAGE_SIZE) : null;
 
   return (
     <section className="search">
@@ -100,16 +138,22 @@ export default function SearchView({ newItems, onDeleted }: Props) {
         </button>
       </form>
 
-      {searched && total !== null && (
+      {total !== null && (
         <p className="search__meta">
-          {total === 0
-            ? "No results"
-            : `${total} result${total === 1 ? "" : "s"} for `}
-          {total > 0 && <strong>"{query}"</strong>}
+          {total === 0 ? (
+            "No results"
+          ) : query.trim() ? (
+            <>
+              {total} result{total === 1 ? "" : "s"} for{" "}
+              <strong>"{query}"</strong>
+            </>
+          ) : (
+            `${total} document${total === 1 ? "" : "s"} in the archive`
+          )}
         </p>
       )}
 
-      {!searched && newItems.length === 0 && (
+      {total === 0 && !loading && (
         <div className="search__empty">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
@@ -120,20 +164,44 @@ export default function SearchView({ newItems, onDeleted }: Props) {
             />
           </svg>
           <p>
-            Nothing here yet. Archive something to get started, or search the
-            collection above.
+            {query.trim()
+              ? "No documents match your search."
+              : "Nothing here yet. Archive something to get started."}
           </p>
         </div>
       )}
 
-      {displayList.length > 0 && (
+      {results.length > 0 && (
         <ul className="search__results">
-          {displayList.map((doc) => (
+          {results.map((doc) => (
             <li key={doc.id}>
               <ArchiveCard doc={doc} onDeleted={onDeleted} />
             </li>
           ))}
         </ul>
+      )}
+
+      {(hasPrev || hasNext) && (
+        <div className="search__pagination">
+          <button
+            className="btn btn--secondary"
+            disabled={!hasPrev || loading}
+            onClick={handlePrev}
+          >
+            ← Previous
+          </button>
+          <span>
+            Page {pageIndex + 1}
+            {totalPages !== null ? ` of ${totalPages}` : ""}
+          </span>
+          <button
+            className="btn btn--secondary"
+            disabled={!hasNext || loading}
+            onClick={handleNext}
+          >
+            Next →
+          </button>
+        </div>
       )}
     </section>
   );

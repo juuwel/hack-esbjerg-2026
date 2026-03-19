@@ -54,4 +54,5 @@ export interface UploadArchiveRequest {
 export interface SearchResult {
     total: number;
     hits: ArchiveDocument[];
+    nextCursor?: string;
 }

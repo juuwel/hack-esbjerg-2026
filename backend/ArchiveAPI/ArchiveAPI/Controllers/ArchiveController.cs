@@ -107,27 +107,50 @@ public class ArchiveController : ControllerBase
     /// Search across all archive documents
     /// </summary>
     /// <remarks>
-    /// Performs a full-text search across all indexed archive documents. 
-    /// The search query is matched against the document title, content, and source fields.
-    /// If no query is provided, all documents are returned.
-    /// Results are limited by the size parameter (default: 10, max: 100).
+    /// Performs a full-text search across all indexed archive documents.
+    /// If no query is provided, all documents are returned ordered by newest first.
+    /// Pass the opaque <c>nextCursor</c> value from a previous response as <c>cursor</c> to retrieve the next page.
     /// </remarks>
-    /// <param name="q">The search query string (optional — omit or leave empty to return all documents)</param>
-    /// <param name="size">Maximum number of results to return (default: 10)</param>
-    /// <returns>Search results with matching documents and total count</returns>
+    /// <param name="q">The search query string (optional)</param>
+    /// <param name="size">Maximum number of results to return (default: 20, max: 100)</param>
+    /// <param name="cursor">Opaque pagination cursor returned by the previous page (optional)</param>
+    /// <returns>Search results with matching documents, total count, and optional next-page cursor</returns>
     /// <response code="200">Search completed successfully</response>
     [HttpGet("search")]
     [Produces("application/json")]
-    public async Task<IActionResult> Search([FromQuery] string? q, [FromQuery] int size = 10)
+    public async Task<IActionResult> Search([FromQuery] string? q, [FromQuery] int size = 20, [FromQuery] string? cursor = null)
     {
-        // Limit size to prevent resource exhaustion
-        if (size > 100)
-            size = 100;
-        if (size < 1)
-            size = 10;
+        if (size > 100) size = 100;
+        if (size < 1)  size = 20;
 
-        var results = await _searchService.SearchAsync<ArchiveDocument>("archive", q ?? string.Empty, size);
+        var results = await _searchService.SearchAsync<ArchiveDocument>("archive", q ?? string.Empty, size, cursor);
         return Ok(results);
+    }
+
+    /// <summary>
+    /// Delete a stored file from MinIO
+    /// </summary>
+    /// <remarks>
+    /// Removes the raw binary file associated with an archived document.
+    /// Called alongside document deletion to clean up storage.
+    /// </remarks>
+    /// <param name="objectName">The MinIO object name to delete</param>
+    /// <returns>No content</returns>
+    /// <response code="204">File successfully deleted</response>
+    /// <response code="500">Failed to delete file</response>
+    [HttpDelete("files")]
+    public async Task<IActionResult> DeleteFile([FromQuery] string objectName)
+    {
+        try
+        {
+            await _minioService.DeleteFileAsync(objectName);
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting file {ObjectName}", objectName);
+            return StatusCode(500, new { error = "Failed to delete file" });
+        }
     }
 
     /// <summary>
