@@ -1,4 +1,14 @@
 ﻿services:
+  tesseract:
+    image: hertzg/tesseract-server:latest
+    ports:
+      - "8884:8884"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8884"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   archiveapi:
     build:
       context: ./backend/ArchiveAPI
@@ -12,8 +22,11 @@
       - Minio__URL=http://minio:9000
       - Minio__AccessKey=ROOT
       - Minio__SecretKey=PASSWORD
+      - Tesseract__URL=http://tesseract:8884
     depends_on:
       opensearch:
+        condition: service_healthy
+      tesseract:
         condition: service_healthy
 
   opensearch:

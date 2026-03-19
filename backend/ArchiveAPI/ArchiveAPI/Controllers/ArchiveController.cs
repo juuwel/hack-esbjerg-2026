@@ -109,162 +109,25 @@ public class ArchiveController : ControllerBase
     /// <remarks>
     /// Performs a full-text search across all indexed archive documents. 
     /// The search query is matched against the document title, content, and source fields.
+    /// If no query is provided, all documents are returned.
     /// Results are limited by the size parameter (default: 10, max: 100).
     /// </remarks>
-    /// <param name="q">The search query string (required)</param>
+    /// <param name="q">The search query string (optional — omit or leave empty to return all documents)</param>
     /// <param name="size">Maximum number of results to return (default: 10)</param>
     /// <returns>Search results with matching documents and total count</returns>
     /// <response code="200">Search completed successfully</response>
-    /// <response code="400">Search query parameter missing</response>
     [HttpGet("search")]
     [Produces("application/json")]
-    public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] int size = 10)
+    public async Task<IActionResult> Search([FromQuery] string? q, [FromQuery] int size = 10)
     {
-        if (string.IsNullOrWhiteSpace(q))
-        {
-            return BadRequest(new { error = "Query parameter 'q' is required" });
-        }
-
         // Limit size to prevent resource exhaustion
         if (size > 100)
             size = 100;
         if (size < 1)
             size = 10;
 
-        var results = await _searchService.SearchAsync<ArchiveDocument>("archive", q, size);
+        var results = await _searchService.SearchAsync<ArchiveDocument>("archive", q ?? string.Empty, size);
         return Ok(results);
-    }
-
-    /// <summary>
-    /// Upload a file and archive it
-    /// </summary>
-    /// <remarks>
-    /// Uploads a file to MinIO and indexes a corresponding <see cref="ArchiveDocument"/> in OpenSearch.
-    /// All metadata fields are optional — only the file itself is required.
-    /// Returns the new document ID and a pre-signed download URL valid for 1 hour.
-    /// </remarks>
-    /// <param name="file">The file to upload (multipart/form-data)</param>
-    /// <param name="request">Optional metadata to attach to the archived document</param>
-    /// <returns>The created archive document ID and a pre-signed download URL</returns>
-    /// <response code="201">File uploaded and document indexed successfully</response>
-    /// <response code="400">No file provided or file is empty</response>
-    /// <response code="500">Failed to upload file or index document</response>
-    [HttpPost("files")]
-    [Consumes("multipart/form-data")]
-    [Produces("application/json")]
-    public async Task<IActionResult> UploadFile(IFormFile file, [FromForm] UploadArchiveRequest request)
-    {
-        if (file == null || file.Length == 0)
-            return BadRequest(new { error = "No file provided or file is empty" });
-
-        var documentId = Guid.NewGuid().ToString();
-        var objectName = $"{documentId}/{file.FileName}";
-
-        try
-        {
-            await using var stream = file.OpenReadStream();
-            await _minioService.UploadFileAsync(
-                objectName,
-                stream,
-                file.Length,
-                file.ContentType ?? "application/octet-stream");
-
-            var url = await _minioService.GetPresignedUrlAsync(objectName);
-
-            var document = new ArchiveDocument
-            {
-                Id          = documentId,
-                Title       = request.Title ?? file.FileName,
-                Format      = file.ContentType,
-                ObjectName  = objectName,
-                CapturedAt  = DateTime.UtcNow,
-                SourceUrl           = request.SourceUrl,
-                SourcePlatform      = request.SourcePlatform,
-                Author              = request.Author,
-                ArchivedBy          = request.ArchivedBy,
-                ContentType         = request.ContentType,
-                Language            = request.Language,
-                Location            = request.Location,
-                Community           = request.Community,
-                HistoricalContext   = request.HistoricalContext,
-                OriginalCreatedAt   = request.OriginalCreatedAt,
-                Tags = string.IsNullOrWhiteSpace(request.Tags)
-                    ? []
-                    : [..request.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)],
-            };
-
-            await _searchService.IndexDocumentAsync("archive", documentId, document);
-
-            return CreatedAtAction(nameof(GetDocument), new { id = documentId }, new
-            {
-                id = documentId,
-                objectName,
-                fileName = file.FileName,
-                url
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error uploading file {FileName}", file.FileName);
-            return StatusCode(500, new { error = "Failed to upload file" });
-        }
-    }
-
-    /// <summary>
-    /// Get a pre-signed download URL for a stored file
-    /// </summary>
-    /// <remarks>
-    /// Returns a pre-signed URL that allows direct download of the file for 1 hour.
-    /// </remarks>
-    /// <param name="bucket">The bucket that contains the file</param>
-    /// <param name="objectName">The object name returned when the file was uploaded</param>
-    /// <param name="expirySeconds">URL validity in seconds (default: 3600)</param>
-    /// <returns>Pre-signed download URL</returns>
-    /// <response code="200">URL generated successfully</response>
-    /// <response code="500">Failed to generate URL</response>
-    [HttpGet("files")]
-    [Produces("application/json")]
-    public async Task<IActionResult> GetFileUrl(
-        [FromQuery] string bucket,
-        [FromQuery] string objectName,
-        [FromQuery] int expirySeconds = 3600)
-    {
-        try
-        {
-            var url = await _minioService.GetPresignedUrlAsync(objectName, expirySeconds);
-            return Ok(new { bucket, objectName, url });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error generating pre-signed URL for {ObjectName}", objectName);
-            return StatusCode(500, new { error = "Failed to generate download URL" });
-        }
-    }
-
-    /// <summary>
-    /// Delete a file from MinIO object storage
-    /// </summary>
-    /// <remarks>
-    /// Permanently removes a file from the specified MinIO bucket. This action cannot be undone.
-    /// </remarks>
-    /// <param name="bucket">The bucket that contains the file</param>
-    /// <param name="objectName">The object name to delete</param>
-    /// <returns>No content</returns>
-    /// <response code="204">File successfully deleted</response>
-    /// <response code="500">Failed to delete file</response>
-    [HttpDelete("files")]
-    public async Task<IActionResult> DeleteFile([FromQuery] string objectName)
-    {
-        try
-        {
-            await _minioService.DeleteFileAsync(objectName);
-            return NoContent();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error deleting file {ObjectName}", objectName);
-            return StatusCode(500, new { error = "Failed to delete file" });
-        }
     }
 
     /// <summary>

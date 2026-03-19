@@ -53,6 +53,14 @@ builder.Services.AddMinio(configureClient => configureClient
 
 builder.Services.AddScoped<IMinioService, MinioService>();
 
+// Configure Tesseract OCR HTTP service
+var tesseractUrl = builder.Configuration["Tesseract:URL"] ?? "http://localhost:8884";
+builder.Services.AddHttpClient("tesseract", client =>
+{
+    client.BaseAddress = new Uri(tesseractUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 var app = builder.Build();
 
 // Ensure the MinIO bucket exists once at startup

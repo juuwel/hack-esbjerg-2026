@@ -68,8 +68,9 @@ public class OpenSearchService : IOpenSearchService
         {
             var response = await _client.SearchAsync<T>(s => s
                 .Index(indexName)
-                .Query(q => q
-                    .MultiMatch(mm => mm
+                .Query(q => string.IsNullOrWhiteSpace(query)
+                    ? q.MatchAll()
+                    : q.MultiMatch(mm => mm
                         .Query(query)
                         .Fields(f => f.Field("*"))
                     )
