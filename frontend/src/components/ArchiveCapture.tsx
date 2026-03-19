@@ -227,7 +227,7 @@ export default function ArchiveCapture({ onArchived }: Props) {
     });
 
     try {
-      const res = await fetch("/api/archive/files", {
+      const res = await fetch("/api/file", {
         method: "POST",
         body: form,
       });
@@ -237,7 +237,7 @@ export default function ArchiveCapture({ onArchived }: Props) {
       }
       const data = await res.json();
       // Fetch the full document so we can show it in the results
-      const docRes = await fetch(`/api/archive/documents/${data.id}`);
+      const docRes = await fetch(`/api/archive/documents/${data.documentId}`);
       const doc: ArchiveDocument = await docRes.json();
       onArchived(doc);
       // Reset
