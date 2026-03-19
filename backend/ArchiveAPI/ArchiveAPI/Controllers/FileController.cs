@@ -183,16 +183,14 @@ public class FileController : ControllerBase
     }
 
     [HttpGet()]
-    [Produces("application/json")]
     public async Task<IActionResult> GetFileUrl(
-        [FromQuery] string bucket,
         [FromQuery] string objectName,
         [FromQuery] int expirySeconds = 3600)
     {
         try
         {
             var url = await _minioService.GetPresignedUrlAsync(objectName, expirySeconds);
-            return Ok(new { bucket, objectName, url });
+            return Redirect(url);
         }
         catch (Exception ex)
         {

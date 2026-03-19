@@ -20,6 +20,17 @@ const PLATFORM_COLORS: Record<string, string> = {
   WhatsApp: "#25d366",
 };
 
+const IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/tiff",
+  "image/svg+xml",
+]);
+
 function formatDate(iso?: string) {
   if (!iso) return null;
   return new Date(iso).toLocaleDateString(undefined, {
@@ -41,7 +52,7 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
       await Promise.all([
         doc.objectName
           ? fetch(
-              `/api/archive/files?objectName=${encodeURIComponent(doc.objectName)}`,
+              `/api/file?objectName=${encodeURIComponent(doc.objectName)}`,
               { method: "DELETE" },
             )
           : Promise.resolve(),
@@ -56,6 +67,31 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
   const platformColor = doc.sourcePlatform
     ? (PLATFORM_COLORS[doc.sourcePlatform] ?? "var(--accent)")
     : "var(--accent)";
+
+  const mimeType =
+    doc.metadata?.["mimeType"] ??
+    doc.metadata?.["mimetype"] ??
+    doc.metadata?.["MimeType"] ??
+    doc.format ?? // fallback: derive from the format field
+    "";
+  // Also treat format field values like "PNG", "JPEG" etc. as images
+  const IMAGE_FORMATS = new Set([
+    "PNG",
+    "JPEG",
+    "JPG",
+    "GIF",
+    "WEBP",
+    "BMP",
+    "TIFF",
+    "SVG",
+  ]);
+  const isImage =
+    IMAGE_MIME_TYPES.has(mimeType.toLowerCase()) ||
+    IMAGE_FORMATS.has((doc.format ?? "").toUpperCase());
+  const previewUrl =
+    isImage && doc.objectName
+      ? `/api/file?objectName=${encodeURIComponent(doc.objectName)}`
+      : null;
 
   return (
     <article className={`card${expanded ? " card--expanded" : ""}`}>
@@ -90,6 +126,22 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
       </div>
 
       <h3 className="card__title">{doc.title ?? doc.id}</h3>
+
+      {previewUrl && (
+        <a
+          href={previewUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="card__preview"
+        >
+          <img
+            src={previewUrl}
+            alt={doc.title ?? doc.metadata?.["fileName"] ?? "Preview"}
+            className="card__preview-img"
+            loading="lazy"
+          />
+        </a>
+      )}
 
       {doc.historicalContext && (
         <blockquote className="card__context">
@@ -180,7 +232,7 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
         <div className="card__footer-actions">
           {doc.objectName && (
             <a
-              href={`/api/archive/files?objectName=${encodeURIComponent(doc.objectName)}`}
+              href={`/api/file?objectName=${encodeURIComponent(doc.objectName)}`}
               target="_blank"
               rel="noopener noreferrer"
               className="btn btn--secondary btn--sm"
