@@ -1,5 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using ArchiveAPI.Domain.Entities;
 using ArchiveAPI.Services;
+using ArchiveAPI.Shared.Requests;
 
 namespace ArchiveAPI.Controllers;
 
@@ -134,29 +136,29 @@ public class ArchiveController : ControllerBase
     }
 
     /// <summary>
-    /// Upload a file to MinIO object storage
+    /// Upload a file and archive it
     /// </summary>
     /// <remarks>
-    /// Uploads a file to the MinIO bucket. Accepts any content type.
-    /// Returns the object name and a pre-signed download URL valid for 1 hour.
-    /// Optionally specify a custom bucket via the query parameter; defaults to "archive-files".
+    /// Uploads a file to MinIO and indexes a corresponding <see cref="ArchiveDocument"/> in OpenSearch.
+    /// All metadata fields are optional — only the file itself is required.
+    /// Returns the new document ID and a pre-signed download URL valid for 1 hour.
     /// </remarks>
     /// <param name="file">The file to upload (multipart/form-data)</param>
-    /// <param name="bucket">Target bucket name (optional, defaults to "archive-files")</param>
-    /// <returns>Object name and a pre-signed URL to access the uploaded file</returns>
-    /// <response code="201">File successfully uploaded</response>
+    /// <param name="request">Optional metadata to attach to the archived document</param>
+    /// <returns>The created archive document ID and a pre-signed download URL</returns>
+    /// <response code="201">File uploaded and document indexed successfully</response>
     /// <response code="400">No file provided or file is empty</response>
-    /// <response code="500">Failed to upload file</response>
+    /// <response code="500">Failed to upload file or index document</response>
     [HttpPost("files")]
     [Consumes("multipart/form-data")]
     [Produces("application/json")]
-    public async Task<IActionResult> UploadFile(IFormFile file)
+    public async Task<IActionResult> UploadFile(IFormFile file, [FromForm] UploadArchiveRequest request)
     {
         if (file == null || file.Length == 0)
             return BadRequest(new { error = "No file provided or file is empty" });
 
-        // Build a unique object name preserving the original filename
-        var objectName = $"{Guid.NewGuid()}/{file.FileName}";
+        var documentId = Guid.NewGuid().ToString();
+        var objectName = $"{documentId}/{file.FileName}";
 
         try
         {
@@ -169,15 +171,37 @@ public class ArchiveController : ControllerBase
 
             var url = await _minioService.GetPresignedUrlAsync(objectName);
 
-            return CreatedAtAction(nameof(GetFileUrl), new { objectName = Uri.EscapeDataString(objectName) },
-                new
-                {
-                    objectName,
-                    fileName = file.FileName,
-                    contentType = file.ContentType,
-                    size = file.Length,
-                    url
-                });
+            var document = new ArchiveDocument
+            {
+                Id          = documentId,
+                Title       = request.Title ?? file.FileName,
+                Format      = file.ContentType,
+                ObjectName  = objectName,
+                CapturedAt  = DateTime.UtcNow,
+                SourceUrl           = request.SourceUrl,
+                SourcePlatform      = request.SourcePlatform,
+                Author              = request.Author,
+                ArchivedBy          = request.ArchivedBy,
+                ContentType         = request.ContentType,
+                Language            = request.Language,
+                Location            = request.Location,
+                Community           = request.Community,
+                HistoricalContext   = request.HistoricalContext,
+                OriginalCreatedAt   = request.OriginalCreatedAt,
+                Tags = string.IsNullOrWhiteSpace(request.Tags)
+                    ? []
+                    : [..request.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)],
+            };
+
+            await _searchService.IndexDocumentAsync("archive", documentId, document);
+
+            return CreatedAtAction(nameof(GetDocument), new { id = documentId }, new
+            {
+                id = documentId,
+                objectName,
+                fileName = file.FileName,
+                url
+            });
         }
         catch (Exception ex)
         {
@@ -268,41 +292,5 @@ public class ArchiveController : ControllerBase
             return StatusCode(500, new { error = "Failed to delete document" });
         }
     }
-}
-
-/// <summary>
-/// Represents an archived document in the system
-/// </summary>
-public class ArchiveDocument
-{
-    /// <summary>
-    /// Unique identifier for the document. If not provided, a UUID will be generated.
-    /// </summary>
-    public string? Id { get; set; }
-
-    /// <summary>
-    /// Title or headline of the archived content
-    /// </summary>
-    public string? Title { get; set; }
-
-    /// <summary>
-    /// Full text content of the document. This field is fully searchable.
-    /// </summary>
-    public string? Content { get; set; }
-
-    /// <summary>
-    /// Original source URL or origin of the archived content
-    /// </summary>
-    public string? Source { get; set; }
-
-    /// <summary>
-    /// Timestamp when the document was archived (UTC)
-    /// </summary>
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
-    /// <summary>
-    /// Optional custom metadata as key-value pairs for additional context
-    /// </summary>
-    public Dictionary<string, string>? Metadata { get; set; }
 }
 
