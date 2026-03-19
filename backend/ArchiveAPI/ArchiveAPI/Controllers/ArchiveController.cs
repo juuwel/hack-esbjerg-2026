@@ -11,11 +11,13 @@ namespace ArchiveAPI.Controllers;
 public class ArchiveController : ControllerBase
 {
     private readonly IOpenSearchService _searchService;
+    private readonly IMinioService _minioService;
     private readonly ILogger<ArchiveController> _logger;
 
-    public ArchiveController(IOpenSearchService searchService, ILogger<ArchiveController> logger)
+    public ArchiveController(IOpenSearchService searchService, IMinioService minioService, ILogger<ArchiveController> logger)
     {
         _searchService = searchService;
+        _minioService = minioService;
         _logger = logger;
     }
 
@@ -129,6 +131,116 @@ public class ArchiveController : ControllerBase
 
         var results = await _searchService.SearchAsync<ArchiveDocument>("archive", q, size);
         return Ok(results);
+    }
+
+    /// <summary>
+    /// Upload a file to MinIO object storage
+    /// </summary>
+    /// <remarks>
+    /// Uploads a file to the MinIO bucket. Accepts any content type.
+    /// Returns the object name and a pre-signed download URL valid for 1 hour.
+    /// Optionally specify a custom bucket via the query parameter; defaults to "archive-files".
+    /// </remarks>
+    /// <param name="file">The file to upload (multipart/form-data)</param>
+    /// <param name="bucket">Target bucket name (optional, defaults to "archive-files")</param>
+    /// <returns>Object name and a pre-signed URL to access the uploaded file</returns>
+    /// <response code="201">File successfully uploaded</response>
+    /// <response code="400">No file provided or file is empty</response>
+    /// <response code="500">Failed to upload file</response>
+    [HttpPost("files")]
+    [Consumes("multipart/form-data")]
+    [Produces("application/json")]
+    public async Task<IActionResult> UploadFile(IFormFile file)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest(new { error = "No file provided or file is empty" });
+
+        // Build a unique object name preserving the original filename
+        var objectName = $"{Guid.NewGuid()}/{file.FileName}";
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            await _minioService.UploadFileAsync(
+                objectName,
+                stream,
+                file.Length,
+                file.ContentType ?? "application/octet-stream");
+
+            var url = await _minioService.GetPresignedUrlAsync(objectName);
+
+            return CreatedAtAction(nameof(GetFileUrl), new { objectName = Uri.EscapeDataString(objectName) },
+                new
+                {
+                    objectName,
+                    fileName = file.FileName,
+                    contentType = file.ContentType,
+                    size = file.Length,
+                    url
+                });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error uploading file {FileName}", file.FileName);
+            return StatusCode(500, new { error = "Failed to upload file" });
+        }
+    }
+
+    /// <summary>
+    /// Get a pre-signed download URL for a stored file
+    /// </summary>
+    /// <remarks>
+    /// Returns a pre-signed URL that allows direct download of the file for 1 hour.
+    /// </remarks>
+    /// <param name="bucket">The bucket that contains the file</param>
+    /// <param name="objectName">The object name returned when the file was uploaded</param>
+    /// <param name="expirySeconds">URL validity in seconds (default: 3600)</param>
+    /// <returns>Pre-signed download URL</returns>
+    /// <response code="200">URL generated successfully</response>
+    /// <response code="500">Failed to generate URL</response>
+    [HttpGet("files")]
+    [Produces("application/json")]
+    public async Task<IActionResult> GetFileUrl(
+        [FromQuery] string bucket,
+        [FromQuery] string objectName,
+        [FromQuery] int expirySeconds = 3600)
+    {
+        try
+        {
+            var url = await _minioService.GetPresignedUrlAsync(objectName, expirySeconds);
+            return Ok(new { bucket, objectName, url });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating pre-signed URL for {ObjectName}", objectName);
+            return StatusCode(500, new { error = "Failed to generate download URL" });
+        }
+    }
+
+    /// <summary>
+    /// Delete a file from MinIO object storage
+    /// </summary>
+    /// <remarks>
+    /// Permanently removes a file from the specified MinIO bucket. This action cannot be undone.
+    /// </remarks>
+    /// <param name="bucket">The bucket that contains the file</param>
+    /// <param name="objectName">The object name to delete</param>
+    /// <returns>No content</returns>
+    /// <response code="204">File successfully deleted</response>
+    /// <response code="500">Failed to delete file</response>
+    [HttpDelete("files")]
+    public async Task<IActionResult> DeleteFile([FromQuery] string objectName)
+    {
+        try
+        {
+            await _minioService.DeleteFileAsync(objectName);
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting file {ObjectName}", objectName);
+            return StatusCode(500, new { error = "Failed to delete file" });
+        }
     }
 
     /// <summary>

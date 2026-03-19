@@ -1,4 +1,5 @@
 using ArchiveAPI.Services;
+using Minio;
 using OpenSearch.Client;
 using Scalar.AspNetCore;
 using ArchiveAPI.Presentation;
@@ -37,7 +38,29 @@ var settings = new ConnectionSettings(new Uri(openSearchUrl))
 builder.Services.AddSingleton<IOpenSearchClient>(new OpenSearchClient(settings));
 builder.Services.AddScoped<IOpenSearchService, OpenSearchService>();
 
+// Configure MinIO
+var minioUrl = new Uri(builder.Configuration["Minio:URL"] ?? "http://localhost:9000");
+var minioEndpoint = minioUrl.Authority;
+var minioAccessKey = builder.Configuration["Minio:AccessKey"] ?? "minioadmin";
+var minioSecretKey = builder.Configuration["Minio:SecretKey"] ?? "minioadmin";
+var minioUseSsl = minioUrl.Scheme == "https";
+
+builder.Services.AddMinio(configureClient => configureClient
+    .WithEndpoint(minioEndpoint)
+    .WithCredentials(minioAccessKey, minioSecretKey)
+    .WithSSL(minioUseSsl)
+    .Build());
+
+builder.Services.AddScoped<IMinioService, MinioService>();
+
 var app = builder.Build();
+
+// Ensure the MinIO bucket exists once at startup
+using (var scope = app.Services.CreateScope())
+{
+    var minio = scope.ServiceProvider.GetRequiredService<IMinioService>();
+    await minio.EnsureBucketExistsAsync(MinioService.BUCKET);
+}
 
 app.UseExceptionHandler();
 
