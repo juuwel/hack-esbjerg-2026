@@ -54,3 +54,5 @@ x86/
 *.ntvs*
 *.njsproj
 *.sw?
+
+**/data/
