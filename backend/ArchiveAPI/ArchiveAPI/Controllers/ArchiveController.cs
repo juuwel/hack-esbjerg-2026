@@ -30,8 +30,6 @@ public class ArchiveController : ControllerBase
     /// <response code="200">OpenSearch is healthy and ready to use</response>
     /// <response code="503">OpenSearch is unhealthy or unreachable</response>
     [HttpGet("health")]
-    [ProduceResponseType(StatusCodes.Status200OK)]
-    [ProduceResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Health()
     {
         var isHealthy = await _searchService.HealthCheckAsync();
@@ -56,9 +54,6 @@ public class ArchiveController : ControllerBase
     /// <response code="400">Invalid or null document provided</response>
     /// <response code="500">Failed to index document</response>
     [HttpPost("documents")]
-    [ProduceResponseType(StatusCodes.Status201Created)]
-    [ProduceResponseType(StatusCodes.Status400BadRequest)]
-    [ProduceResponseType(StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> IndexDocument([FromBody] ArchiveDocument document)
     {
         if (document == null)
@@ -91,8 +86,7 @@ public class ArchiveController : ControllerBase
     /// <response code="200">Document found and returned</response>
     /// <response code="404">Document not found</response>
     [HttpGet("documents/{id}")]
-    [ProduceResponseType(StatusCodes.Status200OK, Type = typeof(ArchiveDocument))]
-    [ProduceResponseType(StatusCodes.Status404NotFound)]
+    [Produces("application/json")]
     public async Task<IActionResult> GetDocument(string id)
     {
         var document = await _searchService.GetDocumentAsync<ArchiveDocument>("archive", id);
@@ -119,8 +113,7 @@ public class ArchiveController : ControllerBase
     /// <response code="200">Search completed successfully</response>
     /// <response code="400">Search query parameter missing</response>
     [HttpGet("search")]
-    [ProduceResponseType(StatusCodes.Status200OK, Type = typeof(SearchResult<ArchiveDocument>))]
-    [ProduceResponseType(StatusCodes.Status400BadRequest)]
+    [Produces("application/json")]
     public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] int size = 10)
     {
         if (string.IsNullOrWhiteSpace(q))
@@ -150,8 +143,6 @@ public class ArchiveController : ControllerBase
     /// <response code="204">Document successfully deleted</response>
     /// <response code="500">Failed to delete document</response>
     [HttpDelete("documents/{id}")]
-    [ProduceResponseType(StatusCodes.Status204NoContent)]
-    [ProduceResponseType(StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> DeleteDocument(string id)
     {
         try
