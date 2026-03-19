@@ -37,6 +37,9 @@ var settings = new ConnectionSettings(new Uri(openSearchUrl))
 builder.Services.AddSingleton<IOpenSearchClient>(new OpenSearchClient(settings));
 builder.Services.AddScoped<IOpenSearchService, OpenSearchService>();
 
+// Register Gemini Service
+builder.Services.AddHttpClient<IGeminiService, GeminiService>();
+
 var app = builder.Build();
 
 app.UseExceptionHandler();

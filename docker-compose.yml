@@ -9,6 +9,7 @@
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:8080
       - OPENSEARCH__URL=http://opensearch:9200
+      - Gemini__ApiKey=${GEMINI_API_KEY}
     depends_on:
       opensearch:
         condition: service_healthy
@@ -33,6 +34,3 @@
       memlock:
         soft: -1
         hard: -1
-
-
-    
