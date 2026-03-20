@@ -67,7 +67,7 @@ public class FileController : ControllerBase
                     file.ContentType);
             }
 
-            var url = await _minioService.GetPresignedUrlAsync(objectName);
+            var url = $"/api/file?objectName={Uri.EscapeDataString(objectName)}";
 
             // --- Derive metadata ---
             var extension = Path.GetExtension(file.FileName);
@@ -183,19 +183,17 @@ public class FileController : ControllerBase
     }
 
     [HttpGet()]
-    public async Task<IActionResult> GetFileUrl(
-        [FromQuery] string objectName,
-        [FromQuery] int expirySeconds = 3600)
+    public async Task<IActionResult> GetFileUrl([FromQuery] string objectName)
     {
         try
         {
-            var url = await _minioService.GetPresignedUrlAsync(objectName, expirySeconds);
-            return Redirect(url);
+            var file = await _minioService.GetFileAsync(objectName);
+            return File(file.Content, file.ContentType, enableRangeProcessing: true);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error generating pre-signed URL for {ObjectName}", objectName);
-            return StatusCode(500, new { error = "Failed to generate download URL" });
+            _logger.LogError(ex, "Error streaming file {ObjectName}", objectName);
+            return StatusCode(500, new { error = "Failed to stream file" });
         }
     }
     

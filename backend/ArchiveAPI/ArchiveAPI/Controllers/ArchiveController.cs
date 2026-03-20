@@ -154,29 +154,28 @@ public class ArchiveController : ControllerBase
     }
 
     /// <summary>
-    /// Get a pre-signed download URL for a stored file
+    /// Stream a stored file through the API
     /// </summary>
     /// <remarks>
-    /// Redirects the caller directly to the pre-signed MinIO URL so the browser
-    /// can download or display the file inline (e.g. image previews).
+    /// Streams the stored file back through the API so browsers do not need direct
+    /// network access to the underlying MinIO service.
     /// </remarks>
     /// <param name="objectName">The MinIO object name</param>
-    /// <param name="expirySeconds">URL validity in seconds (default: 3600)</param>
-    /// <returns>302 redirect to the pre-signed URL</returns>
-    /// <response code="302">Redirect to pre-signed URL</response>
-    /// <response code="500">Failed to generate URL</response>
+    /// <returns>The stored file stream</returns>
+    /// <response code="200">File streamed successfully</response>
+    /// <response code="500">Failed to stream file</response>
     [HttpGet("files")]
-    public async Task<IActionResult> GetFile([FromQuery] string objectName, [FromQuery] int expirySeconds = 3600)
+    public async Task<IActionResult> GetFile([FromQuery] string objectName)
     {
         try
         {
-            var url = await _minioService.GetPresignedUrlAsync(objectName, expirySeconds);
-            return Redirect(url);
+            var file = await _minioService.GetFileAsync(objectName);
+            return File(file.Content, file.ContentType, enableRangeProcessing: true);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error generating pre-signed URL for {ObjectName}", objectName);
-            return StatusCode(500, new { error = "Failed to generate file URL" });
+            _logger.LogError(ex, "Error streaming file {ObjectName}", objectName);
+            return StatusCode(500, new { error = "Failed to stream file" });
         }
     }
 

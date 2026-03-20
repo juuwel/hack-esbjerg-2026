@@ -41,17 +41,28 @@ public class MinioService(IMinioClient client, ILogger<MinioService> logger) : I
         return objectName;
     }
 
-    public async Task<string> GetPresignedUrlAsync(
-        string objectName,
-        int expirySeconds = 3600,
-        CancellationToken ct = default)
+    public async Task<StoredObject> GetFileAsync(string objectName, CancellationToken ct = default)
     {
-        var args = new PresignedGetObjectArgs()
+        var statArgs = new StatObjectArgs()
+            .WithBucket(BUCKET)
+            .WithObject(objectName);
+
+        var stat = await client.StatObjectAsync(statArgs, ct);
+
+        var content = new MemoryStream();
+        var getArgs = new GetObjectArgs()
             .WithBucket(BUCKET)
             .WithObject(objectName)
-            .WithExpiry(expirySeconds);
+            .WithCallbackStream(stream => stream.CopyTo(content));
 
-        return await client.PresignedGetObjectAsync(args);
+        await client.GetObjectAsync(getArgs, ct);
+        content.Position = 0;
+
+        var contentType = string.IsNullOrWhiteSpace(stat.ContentType)
+            ? "application/octet-stream"
+            : stat.ContentType;
+
+        return new StoredObject(content, contentType, stat.Size);
     }
 
     public async Task DeleteFileAsync(string objectName, CancellationToken ct = default)

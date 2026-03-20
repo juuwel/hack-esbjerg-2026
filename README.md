@@ -12,6 +12,26 @@ Now think about what's happening right now, in 2026. The memes that explained an
 
 Where does it go?
 
+## Run the project with Docker
+
+The full stack can now run without installing frontend dependencies locally.
+
+1. Create a `.env` file in the repository root with at least:
+   - `OPENSEARCH_INITIAL_ADMIN_PASSWORD=your-strong-password`
+   - `GEMINI_API_KEY=your-api-key`
+2. Start the stack:
+
+   ```powershell
+   docker compose up --build
+   ```
+
+3. Open the apps:
+   - Frontend: `http://localhost:3000`
+   - API: `http://localhost:8080`
+   - MinIO Console: `http://localhost:9001`
+
+The frontend proxies all `/api` requests to the backend container, so browser access works without extra CORS setup.
+
 Here's the uncomfortable truth: we've spent 30 years building incredibly sophisticated systems to preserve the past. WebLager has digitised 35 million files — building permits, land records, marriage deeds, the EU's central archives. We know better than almost anyone what it takes to make something last.
 
 But nobody has seriously asked: what does an archive built for _right now_ actually look like?

@@ -31,7 +31,9 @@ builder.Services.AddOpenApi(options =>
 });
 
 // Configure OpenSearch
-var openSearchUrl = builder.Configuration["OPENSEARCH__URL"] ?? "http://localhost:9200";
+var openSearchUrl = builder.Configuration["OPENSEARCH:URL"]
+                    ?? builder.Configuration["OPENSEARCH__URL"]
+                    ?? "http://localhost:9200";
 var settings = new ConnectionSettings(new Uri(openSearchUrl))
     .DefaultIndex("archive");
 

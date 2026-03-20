@@ -18,9 +18,9 @@ public interface IMinioService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Generates a pre-signed URL for downloading the object.
+    /// Retrieves an object and its metadata for streaming through the API.
     /// </summary>
-    Task<string> GetPresignedUrlAsync(string objectName, int expirySeconds = 3600, CancellationToken ct = default);
+    Task<StoredObject> GetFileAsync(string objectName, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes an object from the bucket.
