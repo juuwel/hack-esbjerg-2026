@@ -61,6 +61,9 @@ builder.Services.AddHttpClient("tesseract", client =>
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
+// Register Gemini Service
+builder.Services.AddHttpClient<IGeminiService, GeminiService>();
+
 var app = builder.Build();
 
 // Ensure the MinIO bucket exists once at startup
