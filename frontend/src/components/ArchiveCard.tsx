@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { ArchiveDocument } from "../types";
 
 interface Props {
   doc: ArchiveDocument;
   onDeleted: (id: string) => void;
+  query?: string;
+  onTagClick?: (tag: string) => void;
 }
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -40,7 +42,38 @@ function formatDate(iso?: string) {
   });
 }
 
-export default function ArchiveCard({ doc, onDeleted }: Props) {
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getHighlightTerms(query?: string) {
+  if (!query) return [];
+
+  return [...new Set(query.split(/\s+/).map((term) => term.trim()).filter(Boolean))]
+    .sort((a, b) => b.length - a.length);
+}
+
+function highlightText(text: string | undefined, query?: string): ReactNode {
+  if (!text) return text ?? null;
+
+  const terms = getHighlightTerms(query);
+  if (terms.length === 0) return text;
+
+  const matcher = new RegExp(`(${terms.map(escapeRegExp).join("|")})`, "gi");
+  const parts = text.split(matcher);
+
+  return parts.map((part, index) =>
+    terms.some((term) => term.toLowerCase() === part.toLowerCase()) ? (
+      <mark key={`${part}-${index}`} className="search-highlight">
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
+  );
+}
+
+export default function ArchiveCard({ doc, onDeleted, query, onTagClick }: Props) {
   const [deleting, setDeleting] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -92,6 +125,7 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
     isImage && doc.objectName
       ? `/api/file?objectName=${encodeURIComponent(doc.objectName)}`
       : null;
+  const normalizedQuery = query?.trim().toLowerCase() ?? "";
 
   return (
     <article className={`card${expanded ? " card--expanded" : ""}`}>
@@ -106,7 +140,7 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
                 borderColor: platformColor + "55",
               }}
             >
-              {doc.sourcePlatform}
+              {highlightText(doc.sourcePlatform, query)}
             </span>
           )}
           {doc.contentType && (
@@ -125,7 +159,7 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
         </time>
       </div>
 
-      <h3 className="card__title">{doc.title ?? doc.id}</h3>
+      <h3 className="card__title">{highlightText(doc.title ?? doc.id, query)}</h3>
 
       {previewUrl && (
         <a
@@ -148,7 +182,7 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
           <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
             <path d="M6.29 3.31C4.14 4.95 3 7.1 3 9.5c0 2.97 1.67 5.03 4 5.5V17l4-4-4-4v2.14C5.44 10.7 5 9.2 5 9.5c0-1.57.85-3.05 2.47-4.27L6.29 3.31zm8 0C12.14 4.95 11 7.1 11 9.5c0 2.97 1.67 5.03 4 5.5V17l4-4-4-4v2.14c-1.56-.44-2-1.94-2-1.64 0-1.57.85-3.05 2.47-4.27l-1.18-1.92z" />
           </svg>
-          <p>{doc.historicalContext}</p>
+          <p>{highlightText(doc.historicalContext, query)}</p>
         </blockquote>
       )}
 
@@ -157,13 +191,13 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
           {doc.author && (
             <p className="card__detail">
               <span>Author</span>
-              {doc.author}
+              {highlightText(doc.author, query)}
             </p>
           )}
           {doc.archivedBy && (
             <p className="card__detail">
               <span>Archived by</span>
-              {doc.archivedBy}
+              {highlightText(doc.archivedBy, query)}
             </p>
           )}
           {doc.originalCreatedAt && (
@@ -175,13 +209,13 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
           {doc.location && (
             <p className="card__detail">
               <span>Location</span>
-              {doc.location}
+              {highlightText(doc.location, query)}
             </p>
           )}
           {doc.community && (
             <p className="card__detail">
               <span>Community</span>
-              {doc.community}
+              {highlightText(doc.community, query)}
             </p>
           )}
           {doc.sourceUrl && (
@@ -193,7 +227,7 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
                 rel="noopener noreferrer"
                 className="card__link"
               >
-                {doc.sourceUrl}
+                {highlightText(doc.sourceUrl, query)}
               </a>
             </p>
           )}
@@ -206,13 +240,13 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
           {doc.aiDescription && (
             <p className="card__detail">
               <span>AI description</span>
-              {doc.aiDescription}
+              {highlightText(doc.aiDescription, query)}
             </p>
           )}
           {doc.aiTags && doc.aiTags.length > 0 && (
             <p className="card__detail">
               <span>AI tags</span>
-              {doc.aiTags.join(", ")}
+              {highlightText(doc.aiTags.join(", "), query)}
             </p>
           )}
           {doc.checksumSha256 && (
@@ -228,7 +262,14 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
         <ul className="card__tags" aria-label="Tags">
           {doc.tags.map((t) => (
             <li key={t} className="card__tag">
-              {t}
+              <button
+                type="button"
+                className={`card__tag-button${normalizedQuery === t.toLowerCase() ? " card__tag-button--active" : ""}`}
+                onClick={() => onTagClick?.(t)}
+                aria-label={`Filter archive by tag ${t}`}
+              >
+                {highlightText(t, query)}
+              </button>
             </li>
           ))}
         </ul>
@@ -237,7 +278,7 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
       <div className="card__footer">
         <button
           className="btn btn--ghost btn--sm"
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded((value: boolean) => !value)}
         >
           {expanded ? "Less detail" : "More detail"}
         </button>

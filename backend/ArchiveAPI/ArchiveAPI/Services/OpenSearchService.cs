@@ -68,6 +68,8 @@ public class OpenSearchService : IOpenSearchService
     {
         try
         {
+            var trimmedQuery = query?.Trim() ?? string.Empty;
+
             // Decode the opaque cursor into sort values for search_after
             object[]? searchAfterValues = null;
             if (!string.IsNullOrEmpty(searchAfterCursor))
@@ -80,11 +82,57 @@ public class OpenSearchService : IOpenSearchService
             {
                 s.Index(indexName)
                  .TrackTotalHits()
-                 .Query(q => string.IsNullOrWhiteSpace(query)
+                 .Query(q => string.IsNullOrWhiteSpace(trimmedQuery)
                      ? q.MatchAll()
-                     : q.MultiMatch(mm => mm
-                         .Query(query)
-                         .Fields(f => f.Field("*"))
+                     : q.Bool(b => b
+                         .Should(
+                             sh => sh.MultiMatch(mm => mm
+                                 .Query(trimmedQuery)
+                                 .Type(TextQueryType.PhrasePrefix)
+                                 .Fields(f => f
+                                     .Field("title^8")
+                                     .Field("tags^7")
+                                     .Field("aiTags^7")
+                                     .Field("aiDescription^6")
+                                     .Field("historicalContext^3")
+                                     .Field("content^2")
+                                 )
+                             ),
+                             sh => sh.MultiMatch(mm => mm
+                                 .Query(trimmedQuery)
+                                 .Type(TextQueryType.BestFields)
+                                 .Operator(Operator.And)
+                                 .Fields(f => f
+                                     .Field("title^7")
+                                     .Field("tags^6")
+                                     .Field("aiTags^6")
+                                     .Field("aiDescription^5")
+                                     .Field("historicalContext^2.5")
+                                     .Field("content^2")
+                                     .Field("sourcePlatform^2")
+                                     .Field("community^2")
+                                     .Field("location^1.5")
+                                 )
+                             ),
+                             sh => sh.MultiMatch(mm => mm
+                                 .Query(trimmedQuery)
+                                 .Type(TextQueryType.BestFields)
+                                 .Fuzziness(Fuzziness.Auto)
+                                 .MinimumShouldMatch("75%")
+                                 .Fields(f => f
+                                     .Field("title^5")
+                                     .Field("tags^5")
+                                     .Field("aiTags^5")
+                                     .Field("aiDescription^4")
+                                     .Field("historicalContext^2")
+                                     .Field("content^1.5")
+                                     .Field("sourcePlatform^1.5")
+                                     .Field("community^1.5")
+                                     .Field("location")
+                                 )
+                             )
+                     )
+                         .MinimumShouldMatch(1)
                      )
                  )
                  // Sort deterministically: newest first, _id as tiebreaker (always keyword-sortable)

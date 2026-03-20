@@ -41,6 +41,7 @@ export default function SearchView({ newItems, onDeleted }: Props) {
   const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const doSearch = useCallback(
     async (q: string, cursor?: string, newStack?: (string | undefined)[]) => {
@@ -96,6 +97,16 @@ export default function SearchView({ newItems, onDeleted }: Props) {
     resetAndSearch(query);
   };
 
+  const applyQuery = useCallback(
+    (nextQuery: string) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      setQuery(nextQuery);
+      resetAndSearch(nextQuery);
+      inputRef.current?.focus();
+    },
+    [resetAndSearch],
+  );
+
   const handleNext = () => {
     const nextCursor = cursorStack[pageIndex + 1];
     if (!nextCursor) return;
@@ -133,7 +144,9 @@ export default function SearchView({ newItems, onDeleted }: Props) {
       return total;
     }
 
-    const fetchedIds = new Set(results.map((doc) => doc.id));
+    const fetchedIds = new Set(
+      results.map((doc: ArchiveDocument) => doc.id),
+    );
     const localOnlyCount = newItems.reduce(
       (count, doc) => count + (fetchedIds.has(doc.id) ? 0 : 1),
       0,
@@ -178,10 +191,11 @@ export default function SearchView({ newItems, onDeleted }: Props) {
             />
           </svg>
           <input
+            ref={inputRef}
             id="search-input"
             className="search__input"
             type="search"
-            placeholder="Search titles, tags, context, platform…"
+            placeholder="Search titles, descriptions, tags, context, platform…"
             value={query}
             onChange={handleChange}
             autoComplete="off"
@@ -230,9 +244,14 @@ export default function SearchView({ newItems, onDeleted }: Props) {
 
       {displayedResults.length > 0 && (
         <ul className="search__results">
-          {displayedResults.map((doc) => (
+          {displayedResults.map((doc: ArchiveDocument) => (
             <li key={doc.id}>
-              <ArchiveCard doc={doc} onDeleted={handleDelete} />
+              <ArchiveCard
+                doc={doc}
+                onDeleted={handleDelete}
+                query={query}
+                onTagClick={applyQuery}
+              />
             </li>
           ))}
         </ul>

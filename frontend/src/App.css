@@ -597,6 +597,13 @@
   gap: 14px;
 }
 
+.search-highlight {
+  background: rgba(250, 204, 21, 0.28);
+  color: inherit;
+  border-radius: 4px;
+  padding: 0 0.12em;
+}
+
 /* ─────────────────────────────────────────────────────────────
    Archive card
 ───────────────────────────────────────────────────────────── */
@@ -715,12 +722,38 @@
   padding: 0;
 }
 .card__tag {
+  margin: 0;
+}
+.card__tag-button {
+  appearance: none;
+  font: inherit;
   font-size: 12px;
   padding: 2px 8px;
   background: var(--code-bg);
   border-radius: 20px;
   color: var(--text);
   border: 1px solid var(--border);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s,
+    box-shadow 0.15s;
+}
+.card__tag-button:hover {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.card__tag-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-bg);
+  border-color: var(--accent);
+}
+.card__tag-button--active {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 
 .card__preview {
