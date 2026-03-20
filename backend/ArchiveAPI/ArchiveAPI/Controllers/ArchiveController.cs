@@ -1,5 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using ArchiveAPI.Domain.Entities;
 using ArchiveAPI.Services;
+using ArchiveAPI.Shared.Requests;
 
 namespace ArchiveAPI.Controllers;
 
@@ -11,11 +13,13 @@ namespace ArchiveAPI.Controllers;
 public class ArchiveController : ControllerBase
 {
     private readonly IOpenSearchService _searchService;
+    private readonly IMinioService _minioService;
     private readonly ILogger<ArchiveController> _logger;
 
-    public ArchiveController(IOpenSearchService searchService, ILogger<ArchiveController> logger)
+    public ArchiveController(IOpenSearchService searchService, IMinioService minioService, ILogger<ArchiveController> logger)
     {
         _searchService = searchService;
+        _minioService = minioService;
         _logger = logger;
     }
 
@@ -103,32 +107,77 @@ public class ArchiveController : ControllerBase
     /// Search across all archive documents
     /// </summary>
     /// <remarks>
-    /// Performs a full-text search across all indexed archive documents. 
-    /// The search query is matched against the document title, content, and source fields.
-    /// Results are limited by the size parameter (default: 10, max: 100).
+    /// Performs a full-text search across all indexed archive documents.
+    /// If no query is provided, all documents are returned ordered by newest first.
+    /// Pass the opaque <c>nextCursor</c> value from a previous response as <c>cursor</c> to retrieve the next page.
     /// </remarks>
-    /// <param name="q">The search query string (required)</param>
-    /// <param name="size">Maximum number of results to return (default: 10)</param>
-    /// <returns>Search results with matching documents and total count</returns>
+    /// <param name="q">The search query string (optional)</param>
+    /// <param name="size">Maximum number of results to return (default: 20, max: 100)</param>
+    /// <param name="cursor">Opaque pagination cursor returned by the previous page (optional)</param>
+    /// <returns>Search results with matching documents, total count, and optional next-page cursor</returns>
     /// <response code="200">Search completed successfully</response>
-    /// <response code="400">Search query parameter missing</response>
     [HttpGet("search")]
     [Produces("application/json")]
-    public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] int size = 10)
+    public async Task<IActionResult> Search([FromQuery] string? q, [FromQuery] int size = 20, [FromQuery] string? cursor = null)
     {
-        if (string.IsNullOrWhiteSpace(q))
-        {
-            return BadRequest(new { error = "Query parameter 'q' is required" });
-        }
+        if (size > 100) size = 100;
+        if (size < 1)  size = 20;
 
-        // Limit size to prevent resource exhaustion
-        if (size > 100)
-            size = 100;
-        if (size < 1)
-            size = 10;
-
-        var results = await _searchService.SearchAsync<ArchiveDocument>("archive", q, size);
+        var results = await _searchService.SearchAsync<ArchiveDocument>("archive", q ?? string.Empty, size, cursor);
         return Ok(results);
+    }
+
+    /// <summary>
+    /// Delete a stored file from MinIO
+    /// </summary>
+    /// <remarks>
+    /// Removes the raw binary file associated with an archived document.
+    /// Called alongside document deletion to clean up storage.
+    /// </remarks>
+    /// <param name="objectName">The MinIO object name to delete</param>
+    /// <returns>No content</returns>
+    /// <response code="204">File successfully deleted</response>
+    /// <response code="500">Failed to delete file</response>
+    [HttpDelete("files")]
+    public async Task<IActionResult> DeleteFile([FromQuery] string objectName)
+    {
+        try
+        {
+            await _minioService.DeleteFileAsync(objectName);
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting file {ObjectName}", objectName);
+            return StatusCode(500, new { error = "Failed to delete file" });
+        }
+    }
+
+    /// <summary>
+    /// Get a pre-signed download URL for a stored file
+    /// </summary>
+    /// <remarks>
+    /// Redirects the caller directly to the pre-signed MinIO URL so the browser
+    /// can download or display the file inline (e.g. image previews).
+    /// </remarks>
+    /// <param name="objectName">The MinIO object name</param>
+    /// <param name="expirySeconds">URL validity in seconds (default: 3600)</param>
+    /// <returns>302 redirect to the pre-signed URL</returns>
+    /// <response code="302">Redirect to pre-signed URL</response>
+    /// <response code="500">Failed to generate URL</response>
+    [HttpGet("files")]
+    public async Task<IActionResult> GetFile([FromQuery] string objectName, [FromQuery] int expirySeconds = 3600)
+    {
+        try
+        {
+            var url = await _minioService.GetPresignedUrlAsync(objectName, expirySeconds);
+            return Redirect(url);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating pre-signed URL for {ObjectName}", objectName);
+            return StatusCode(500, new { error = "Failed to generate file URL" });
+        }
     }
 
     /// <summary>
@@ -156,41 +205,5 @@ public class ArchiveController : ControllerBase
             return StatusCode(500, new { error = "Failed to delete document" });
         }
     }
-}
-
-/// <summary>
-/// Represents an archived document in the system
-/// </summary>
-public class ArchiveDocument
-{
-    /// <summary>
-    /// Unique identifier for the document. If not provided, a UUID will be generated.
-    /// </summary>
-    public string? Id { get; set; }
-
-    /// <summary>
-    /// Title or headline of the archived content
-    /// </summary>
-    public string? Title { get; set; }
-
-    /// <summary>
-    /// Full text content of the document. This field is fully searchable.
-    /// </summary>
-    public string? Content { get; set; }
-
-    /// <summary>
-    /// Original source URL or origin of the archived content
-    /// </summary>
-    public string? Source { get; set; }
-
-    /// <summary>
-    /// Timestamp when the document was archived (UTC)
-    /// </summary>
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
-    /// <summary>
-    /// Optional custom metadata as key-value pairs for additional context
-    /// </summary>
-    public Dictionary<string, string>? Metadata { get; set; }
 }
 

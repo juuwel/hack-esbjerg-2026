@@ -1,4 +1,5 @@
 using ArchiveAPI.Services;
+using Minio;
 using OpenSearch.Client;
 using Scalar.AspNetCore;
 using ArchiveAPI.Presentation;
@@ -37,10 +38,40 @@ var settings = new ConnectionSettings(new Uri(openSearchUrl))
 builder.Services.AddSingleton<IOpenSearchClient>(new OpenSearchClient(settings));
 builder.Services.AddScoped<IOpenSearchService, OpenSearchService>();
 
+// Configure MinIO
+var minioUrl = new Uri(builder.Configuration["Minio:URL"] ?? "http://localhost:9000");
+var minioEndpoint = minioUrl.Authority;
+var minioAccessKey = builder.Configuration["Minio:AccessKey"] ?? "minioadmin";
+var minioSecretKey = builder.Configuration["Minio:SecretKey"] ?? "minioadmin";
+var minioUseSsl = minioUrl.Scheme == "https";
+
+builder.Services.AddMinio(configureClient => configureClient
+    .WithEndpoint(minioEndpoint)
+    .WithCredentials(minioAccessKey, minioSecretKey)
+    .WithSSL(minioUseSsl)
+    .Build());
+
+builder.Services.AddScoped<IMinioService, MinioService>();
+
+// Configure Tesseract OCR HTTP service
+var tesseractUrl = builder.Configuration["Tesseract:URL"] ?? "http://localhost:8884";
+builder.Services.AddHttpClient("tesseract", client =>
+{
+    client.BaseAddress = new Uri(tesseractUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 // Register Gemini Service
 builder.Services.AddHttpClient<IGeminiService, GeminiService>();
 
 var app = builder.Build();
+
+// Ensure the MinIO bucket exists once at startup
+using (var scope = app.Services.CreateScope())
+{
+    var minio = scope.ServiceProvider.GetRequiredService<IMinioService>();
+    await minio.EnsureBucketExistsAsync(MinioService.BUCKET);
+}
 
 app.UseExceptionHandler();
 

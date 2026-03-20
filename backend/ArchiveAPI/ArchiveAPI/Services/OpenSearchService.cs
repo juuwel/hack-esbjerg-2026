@@ -1,4 +1,6 @@
-﻿using OpenSearch.Client;
+﻿using System.Text;
+using System.Text.Json;
+using OpenSearch.Client;
 
 namespace ArchiveAPI.Services;
 
@@ -62,25 +64,63 @@ public class OpenSearchService : IOpenSearchService
         }
     }
 
-    public async Task<SearchResult<T>> SearchAsync<T>(string indexName, string query, int size = 10) where T : class
+    public async Task<SearchResult<T>> SearchAsync<T>(string indexName, string query, int size = 10, string? searchAfterCursor = null) where T : class
     {
         try
         {
-            var response = await _client.SearchAsync<T>(s => s
-                .Index(indexName)
-                .Query(q => q
-                    .MultiMatch(mm => mm
-                        .Query(query)
-                        .Fields(f => f.Field("*"))
-                    )
-                )
-                .Size(size)
-            );
+            // Decode the opaque cursor into sort values for search_after
+            object[]? searchAfterValues = null;
+            if (!string.IsNullOrEmpty(searchAfterCursor))
+            {
+                var json = Encoding.UTF8.GetString(Convert.FromBase64String(searchAfterCursor));
+                searchAfterValues = JsonSerializer.Deserialize<object[]>(json);
+            }
+
+            var response = await _client.SearchAsync<T>(s =>
+            {
+                s.Index(indexName)
+                 .TrackTotalHits()
+                 .Query(q => string.IsNullOrWhiteSpace(query)
+                     ? q.MatchAll()
+                     : q.MultiMatch(mm => mm
+                         .Query(query)
+                         .Fields(f => f.Field("*"))
+                     )
+                 )
+                 // Sort deterministically: newest first, _id as tiebreaker (always keyword-sortable)
+                 .Sort(so => so
+                     .Field(f => f.Field("capturedAt").Descending())
+                     .Field(f => f.Field("_id").Ascending())
+                 )
+                 .Size(size);
+
+                if (searchAfterValues != null)
+                    s.SearchAfter(searchAfterValues);
+
+                return s;
+            });
+
+            if (!response.IsValid)
+            {
+                _logger.LogError("Search failed: {Error}", response.DebugInformation);
+                return new SearchResult<T>();
+            }
+
+            // Encode the sort values of the last hit as the next cursor
+            string? nextCursor = null;
+            var lastHit = response.Hits.LastOrDefault();
+            if (lastHit?.Sorts != null && response.Hits.Count == size)
+            {
+                var sortValues = lastHit.Sorts.ToArray();
+                var json = JsonSerializer.Serialize(sortValues);
+                nextCursor = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+            }
 
             return new SearchResult<T>
             {
-                Documents = response.Documents.ToList(),
-                TotalCount = response.Total
+                Hits = response.Documents.ToList(),
+                Total = response.Total,
+                NextCursor = nextCursor
             };
         }
         catch (Exception ex)
