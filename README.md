@@ -1,113 +1,178 @@
-# WebLager Challenge: "TOMORROW'S ARCHIVE"
+# Tomorrow's Archive
 
-## Half of the Links From 2015 Are Already Dead.
+> *Preserving the present for people who aren't born yet.*
 
-Think about that for a second.
+**Tomorrow's Archive** is a full-stack digital archiving platform built for [Hack Esbjerg 2026](https://hackesbjerg.dk) as part of the WebLager challenge. It lets users capture, enrich, and search files and documents before they disappear from the open web — social posts, local news stories, community threads, images, and anything else worth keeping.
 
-A decade ago, people were posting, sharing, building, and documenting their lives online. Forums. Blogs. Local news. Community Facebook groups. YouTube channels. Entire subcultures. Most of it is gone. Not archived. Not saved somewhere clever. Just gone — because nobody thought it was their job to keep it.
+---
 
-And 2015 wasn't that long ago.
+## Features
 
-Now think about what's happening right now, in 2026. The memes that explained an election better than any newspaper. The Discord server where a community lived for three years. The TikTok that captured exactly what it felt like to be 22 in Denmark this year. The local news story that nobody picked up. The WhatsApp thread where your city's residents actually talked to each other.
+- **Upload anything** — drag-and-drop files of any type with rich provenance metadata (source URL, platform, author, location, historical context, tags)
+- **Automatic OCR** — text is extracted from images (PNG, JPEG, TIFF, WEBP, etc.) via Tesseract
+- **AI enrichment** — images are analysed by Google Gemini 2.5 Flash, producing a short description and search tags automatically
+- **EXIF / IPTC metadata extraction** — image files are pre-filled with embedded camera/author/location data client-side before upload
+- **Full-text search** — boosted multi-field search across titles, tags, AI tags, OCR content, platform, community, location, and historical context
+- **Cursor-based pagination** — stable, deterministic page navigation backed by OpenSearch `search_after`
+- **SHA-256 integrity** — every stored file receives a checksum for tamper detection and longevity auditing
+- **Optimistic UI** — uploads appear immediately in the archive while AI/OCR enrichment continues in the background
 
-Where does it go?
+---
 
-## Run the project with Docker
+## Technology stack
 
-The full stack can now run without installing frontend dependencies locally.
+### Frontend
+| Technology | Role |
+|---|---|
+| [React 19](https://react.dev) | UI framework |
+| [TypeScript 5.9](https://www.typescriptlang.org) | Type-safe component code |
+| [Vite 8](https://vite.dev) | Dev server, bundler, and HMR |
+| [exifr](https://github.com/MikeKovarik/exifr) | Client-side EXIF/IPTC/XMP extraction from image files |
+| ESLint + typescript-eslint | Linting |
 
-1. Create a `.env` file in the repository root with at least:
-   - `OPENSEARCH_INITIAL_ADMIN_PASSWORD=your-strong-password`
-   - `GEMINI_API_KEY=your-api-key`
-2. Start the stack:
+### Backend
+| Technology | Role |
+|---|---|
+| [ASP.NET Core](https://dotnet.microsoft.com/en-us/apps/aspnet) (.NET 10) | REST API |
+| [OpenSearch.Client 1.5](https://github.com/opensearch-project/opensearch-net) | Indexing and full-text search |
+| [Minio SDK 7](https://github.com/minio/minio-dotnet) | Object storage client |
+| [Scalar.AspNetCore](https://scalar.com) | Interactive OpenAPI docs (dev only, at `/scalar`) |
 
-   ```powershell
+### Infrastructure & external services
+| Technology | Role |
+|---|---|
+| [OpenSearch](https://opensearch.org) | Search and document index (default index: `archive`) |
+| [MinIO](https://min.io) | S3-compatible binary object storage (bucket: `archive`) |
+| [Tesseract Server](https://github.com/hertzg/tesseract-server) | External OCR HTTP service for image-to-text |
+| [Google Gemini 2.5 Flash](https://ai.google.dev) | Image description and tag generation |
+| [Docker Compose](https://docs.docker.com/compose/) | Container orchestration for the full stack |
+| [nginx](https://nginx.org) | Static file serving and `/api` reverse proxy for the frontend container |
+
+---
+
+## Architecture
+
+```
+Browser
+  │
+  ├── /api/* ──────────────────────────────► ASP.NET Core API (:8080)
+  │    (proxied by Vite in dev,              │
+  │     proxied by nginx in Docker)          ├── MinIO       (object storage)
+  │                                          ├── OpenSearch  (search index)
+  └── static assets ◄── nginx / Vite        ├── Tesseract   (OCR)
+                                             └── Gemini API  (AI enrichment)
+```
+
+**Ingest path:** `ArchiveCapture.tsx` → `POST /api/file` → SHA-256 checksum + MinIO upload → OCR (images only) → Gemini analysis (images only) → OpenSearch index → optimistic UI hydration via `GET /api/archive/documents/{id}` polling.
+
+**Search path:** `SearchView.tsx` → `GET /api/archive/search?q=&size=&cursor=` → `OpenSearchService.SearchAsync` → boosted `multi_match` → cursor-paginated results.
+
+---
+
+## Getting started
+
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (recommended for the full stack)
+- A [Google Gemini API key](https://aistudio.google.com/app/apikey) (free tier works)
+
+### Full stack (Docker)
+
+1. Create a `.env` file in the repository root:
+   ```env
+   OPENSEARCH_INITIAL_ADMIN_PASSWORD=YourStr0ngPassword!
+   GEMINI_API_KEY=your-gemini-api-key
+   ```
+2. Start everything:
+   ```bash
    docker compose up --build
    ```
-
 3. Open the apps:
-   - Frontend: `http://localhost:3000`
-   - API: `http://localhost:8080`
-   - MinIO Console: `http://localhost:9001`
+   | Service | URL |
+   |---|---|
+   | Frontend | http://localhost:3000 |
+   | API | http://localhost:8080 |
+   | OpenAPI docs (Scalar) | http://localhost:8080/scalar |
+   | MinIO Console | http://localhost:9001 |
 
-The frontend proxies all `/api` requests to the backend container, so browser access works without extra CORS setup.
-
-Here's the uncomfortable truth: we've spent 30 years building incredibly sophisticated systems to preserve the past. WebLager has digitised 35 million files — building permits, land records, marriage deeds, the EU's central archives. We know better than almost anyone what it takes to make something last.
-
-But nobody has seriously asked: what does an archive built for _right now_ actually look like?
-
-Not an archive of PDFs and scanned forms. An archive of the present. One that captures not just official records but the stuff that actually tells the story of how people lived — and keeps it in a way that still works in 50 years.
-
-That's your challenge.
+   MinIO login: `ROOT` / `PASSWORD`
 
 ---
 
-## The Challenge
+## Local development
 
-**Build something that could be the archive of tomorrow — not the archive of yesterday with a fresh coat of paint.**
+### Backend
+Requires .NET SDK 10.
 
-This is deliberately open. The interesting question isn't _what_ to save. It's _how_ — and _why_ — and _for whom_.
+```powershell
+cd backend/ArchiveAPI
+dotnet build ArchiveAPI.sln
+dotnet run --project ArchiveAPI/ArchiveAPI.csproj
+# API listens on http://localhost:5020
+```
 
-Your prototype should tackle at least one of these:
+> **Note:** The build succeeds but emits pre-existing CS1591 XML-doc warnings and a `Scalar.AspNetCore` version resolution warning — both are harmless and can be ignored.
 
-1. **Capture something that's currently falling through the cracks** — the stuff that official archives miss, ignore, or don't know exists
-2. **Make preservation feel less like filing and more like something people actually want to do**
-3. **Build for longevity** — something designed to still work, still be readable, and still make sense in 2075
+### Frontend
+Requires Node.js 20+.
 
-That's it. Go wide.
+```powershell
+cd frontend
+npm install
+npm run dev       # dev server with HMR on http://localhost:5173
+npm run build     # type-check + production bundle
+npm run lint      # ESLint
+```
 
----
-
-## What You Could Build
-
-No mandatory features. No required layers. Just some starting shapes to help you find your angle.
-
-**A capture tool for the living web**  
-Social posts, local news, community threads, neighbourhood chats — build something that grabs a slice of the present and stores it in a way that outlasts the platform it came from. Not a screenshot. Something structured, searchable, and honest about what it is and when it was saved.
-
-**A time capsule with teeth**  
-Anyone can write a note to the future. Almost nobody builds a system that makes sure it actually arrives. Build the time capsule that locks content away until a set date — and actually delivers it. Could be personal, community-scale, or city-scale. Could be serious or delightfully weird.
-
-**An archive that explains itself**  
-A document from 1987 means nothing without context. Build something that wraps archived content in the context needed to understand it — not just what it is, but what was happening when it was made, why it mattered, and what it connects to.
-
-**The missing metadata layer**  
-Most things get saved without enough information to make them useful later. Build the tool that automatically enriches content with the context, tags, location, timestamp, and connections that make it findable and meaningful in 30 years.
-
-**Something we haven't thought of**  
-Seriously. If you have a better idea for what the archive of tomorrow looks like — build that instead.
+The Vite dev server proxies all `/api` requests to `http://localhost:5020` by default (override with the `VITE_API_PROXY_TARGET` env var).
 
 ---
 
-## Pick Your Angle
+## Project structure
 
-### Angle A: "Archive the Vibe"
-
-Official archives save what happened. Nobody saves how it felt. Build a tool that captures the texture of right now — not the news headline but the reaction to it, not the event but the experience of being there. Think oral history meets RSS feed meets time capsule. What would a historian in 2075 actually want to find?
-
-### Angle B: "Nothing Lasts Forever (But It Could)"
-
-Pick one type of content that's actively disappearing — dying websites, deleted social accounts, fading local journalism, expiring links — and build the system that saves it before it's gone. Automated capture, structured storage, smart tagging. Make rescue feel effortless.
-
-### Angle C: "Future-Proof It"
-
-A JPEG from 2003 might already be corrupted. A file format from 2010 might be unreadable by 2040. Build something that thinks about longevity from the ground up — format migration, integrity checking, redundancy, or a whole new way of thinking about what "saved" actually means.
-
-### Angle D: "The Personal Archive"
-
-Institutions have archivists. People don't. Build the tool that helps an individual — or a family, a friend group, a small community — build an archive of their own life and actually keep it. Not a photo album. Something that survives platform shutdowns, dead hard drives, and the general chaos of being human.
+```
+hack-esbjerg-2026/
+├── docker-compose.yml
+├── .env                          # required – not committed
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── ArchiveCapture.tsx   # upload form + optimistic UI
+│   │   │   ├── SearchView.tsx       # search bar + cursor pagination
+│   │   │   └── ArchiveCard.tsx      # result card + delete
+│   │   ├── types.ts                 # ArchiveDocument, SearchResult (keep in sync with backend)
+│   │   └── App.tsx
+│   ├── nginx.conf                   # production proxy config
+│   └── vite.config.ts
+└── backend/ArchiveAPI/ArchiveAPI/
+    ├── Controllers/
+    │   ├── FileController.cs        # POST/GET/DELETE /api/file
+    │   └── ArchiveController.cs     # search, documents, health
+    ├── Services/
+    │   ├── OpenSearchService.cs
+    │   ├── MinioService.cs
+    │   └── GeminiService.cs
+    ├── Domain/Entities/
+    │   └── ArchiveDocument.cs       # canonical document model
+    ├── Shared/Requests/
+    │   └── UploadArchiveRequest.cs  # multipart form metadata shape
+    └── Program.cs                   # DI wiring + startup
+```
 
 ---
 
-## Technical Approaches
+## API overview
 
-**Beginner:**  
-A clean web app where you paste a URL, a post, or some text — and it saves it in a structured, timestamped format with auto-generated metadata. Add a simple browse and search interface. Focus on one thing working really well. A tight, finished single-feature tool will beat an ambitious broken one every time.
-
-**Intermediate:**  
-Automated web capture using APIs or scraping. Format conversion pipelines that save content in open, future-proof formats. LLM-powered context generation — take a piece of content and automatically write the "what was happening when this was saved" wrapper. Time-locked storage that releases content at a set date. Integration with real platforms via their APIs.
-
-**Advanced:**  
-Distributed or decentralised storage for long-term resilience. Cryptographic integrity verification so archives can prove they haven't been tampered with. Automated format migration pipelines. Semantic search across a large archived corpus. AI-powered connection mapping between archived items. A full ingest-enrich-store-retrieve pipeline designed for 50-year durability.
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/file` | Upload a file with metadata; triggers OCR + AI enrichment for images |
+| `GET` | `/api/file?objectName=` | Stream a stored file through the API |
+| `DELETE` | `/api/file?objectName=` | Remove a stored binary from MinIO |
+| `GET` | `/api/archive/search?q=&size=&cursor=` | Full-text search with cursor pagination |
+| `GET` | `/api/archive/documents/{id}` | Fetch a single document by ID |
+| `POST` | `/api/archive/documents` | Index a document directly (no file) |
+| `DELETE` | `/api/archive/documents/{id}` | Remove a document from the search index |
+| `GET` | `/api/archive/health` | OpenSearch connectivity check |
 
 ---
+
+*Built for **WebLager** · Hack Esbjerg 2026*
