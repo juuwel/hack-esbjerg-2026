@@ -203,6 +203,18 @@ export default function ArchiveCard({ doc, onDeleted }: Props) {
               {doc.format}
             </p>
           )}
+          {doc.aiDescription && (
+            <p className="card__detail">
+              <span>AI description</span>
+              {doc.aiDescription}
+            </p>
+          )}
+          {doc.aiTags && doc.aiTags.length > 0 && (
+            <p className="card__detail">
+              <span>AI tags</span>
+              {doc.aiTags.join(", ")}
+            </p>
+          )}
           {doc.checksumSha256 && (
             <p className="card__detail">
               <span>SHA-256</span>

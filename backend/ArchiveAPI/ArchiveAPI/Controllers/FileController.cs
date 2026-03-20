@@ -14,6 +14,7 @@ public class FileController : ControllerBase
 {
     private readonly IMinioService _minioService;
     private readonly IOpenSearchService _searchService;
+    private readonly IGeminiService _geminiService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<FileController> _logger;
 
@@ -23,10 +24,11 @@ public class FileController : ControllerBase
         "image/png", "image/jpeg", "image/jpg", "image/tiff", "image/bmp", "image/gif", "image/webp"
     };
 
-    public FileController(IMinioService minioService, IOpenSearchService searchService, IHttpClientFactory httpClientFactory, ILogger<FileController> logger)
+    public FileController(IMinioService minioService, IOpenSearchService searchService, IGeminiService geminiService, IHttpClientFactory httpClientFactory, ILogger<FileController> logger)
     {
         _minioService = minioService;
         _searchService = searchService;
+        _geminiService = geminiService;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
@@ -48,10 +50,15 @@ public class FileController : ControllerBase
             // --- Read file bytes once for checksum + OCR ---
             byte[] fileBytes;
             await using (var readStream = file.OpenReadStream())
+            await using (var memoryStream = new MemoryStream())
             {
-                fileBytes = new byte[file.Length];
-                _ = await readStream.ReadAsync(fileBytes);
+                await readStream.CopyToAsync(memoryStream);
+                fileBytes = memoryStream.ToArray();
             }
+
+            var contentType = string.IsNullOrWhiteSpace(file.ContentType)
+                ? "application/octet-stream"
+                : file.ContentType;
 
             // --- SHA-256 checksum ---
             var checksumBytes = SHA256.HashData(fileBytes);
@@ -64,7 +71,7 @@ public class FileController : ControllerBase
                     objectName,
                     uploadStream,
                     file.Length,
-                    file.ContentType);
+                    contentType);
             }
 
             var url = $"/api/file?objectName={Uri.EscapeDataString(objectName)}";
@@ -72,24 +79,27 @@ public class FileController : ControllerBase
             // --- Derive metadata ---
             var extension = Path.GetExtension(file.FileName);
             var format = extension.TrimStart('.').ToUpperInvariant();
-            var contentType = file.ContentType;
             // --- OCR for image types ---
             string? extractedText = null;
+            GeminiImageAnalysisResult? imageAnalysis = null;
             if (OcrContentTypes.Contains(contentType))
             {
                 extractedText = await TryExtractTextViaOcrAsync(fileBytes, file.FileName, contentType);
+                imageAnalysis = await TryAnalyzeImageViaGeminiAsync(fileBytes, contentType);
             }
 
             // --- Build ArchiveDocument ---
-            var tags = metadata?.Tags?
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToList() ?? [];
+            var manualTags = ParseTags(metadata?.Tags);
+            var aiTags = imageAnalysis?.Tags ?? [];
+            var tags = MergeTags(manualTags, aiTags);
 
             var document = new ArchiveDocument
             {
                 Id           = documentId,
                 Title        = metadata?.Title ?? Path.GetFileNameWithoutExtension(file.FileName),
                 Content      = extractedText,
+                AiDescription = imageAnalysis?.Description,
+                AiTags       = aiTags,
                 SourceUrl    = metadata?.SourceUrl,
                 SourcePlatform = metadata?.SourcePlatform,
                 Author       = metadata?.Author,
@@ -129,6 +139,7 @@ public class FileController : ControllerBase
                     format,
                     checksum,
                     hasExtractedText = extractedText != null,
+                    hasAiAnalysis = !string.IsNullOrWhiteSpace(imageAnalysis?.Description) || aiTags.Count > 0,
                     url
                 });
         }
@@ -180,6 +191,52 @@ public class FileController : ControllerBase
             _logger.LogWarning(ex, "OCR extraction failed, proceeding without text content");
             return null;
         }
+    }
+
+    private async Task<GeminiImageAnalysisResult?> TryAnalyzeImageViaGeminiAsync(byte[] imageBytes, string contentType)
+    {
+        try
+        {
+            var base64Image = Convert.ToBase64String(imageBytes);
+            return await _geminiService.AnalyzeImageAsync(base64Image, contentType, string.Empty);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Gemini image analysis failed, proceeding without AI enrichment");
+            return null;
+        }
+    }
+
+    private static List<string> ParseTags(string? rawTags)
+    {
+        return string.IsNullOrWhiteSpace(rawTags)
+            ? []
+            : rawTags
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                .ToList();
+    }
+
+    private static List<string> MergeTags(params IEnumerable<string>[] tagCollections)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var merged = new List<string>();
+
+        foreach (var collection in tagCollections)
+        {
+            foreach (var tag in collection)
+            {
+                var normalized = tag.Trim();
+                if (string.IsNullOrWhiteSpace(normalized) || !seen.Add(normalized))
+                {
+                    continue;
+                }
+
+                merged.Add(normalized);
+            }
+        }
+
+        return merged;
     }
 
     [HttpGet()]

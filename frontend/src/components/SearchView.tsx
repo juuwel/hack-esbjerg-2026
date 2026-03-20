@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 import type { ArchiveDocument, SearchResult } from "../types";
 import ArchiveCard from "./ArchiveCard";
 
@@ -8,6 +16,19 @@ interface Props {
   // New items pushed in from the capture panel appear at the top
   newItems: ArchiveDocument[];
   onDeleted: (id: string) => void;
+}
+
+function mergeDocuments(primary: ArchiveDocument[], secondary: ArchiveDocument[]) {
+  const merged: ArchiveDocument[] = [];
+  const seen = new Set<string>();
+
+  for (const doc of [...primary, ...secondary]) {
+    if (seen.has(doc.id)) continue;
+    seen.add(doc.id);
+    merged.push(doc);
+  }
+
+  return merged;
 }
 
 export default function SearchView({ newItems, onDeleted }: Props) {
@@ -62,24 +83,18 @@ export default function SearchView({ newItems, onDeleted }: Props) {
   }, [resetAndSearch]);
 
   // Debounced search as user types
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setQuery(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => resetAndSearch(val), 400);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (debounceRef.current) clearTimeout(debounceRef.current);
     resetAndSearch(query);
   };
-
-  // Refresh first page when a new item is captured
-  useEffect(() => {
-    if (newItems.length > 0) resetAndSearch(query);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newItems]);
 
   const handleNext = () => {
     const nextCursor = cursorStack[pageIndex + 1];
@@ -99,7 +114,49 @@ export default function SearchView({ newItems, onDeleted }: Props) {
 
   const hasNext = !!cursorStack[pageIndex + 1];
   const hasPrev = pageIndex > 0;
-  const totalPages = total !== null ? Math.ceil(total / PAGE_SIZE) : null;
+  const showingLiveUploads = !query.trim() && pageIndex === 0;
+
+  const displayedResults = useMemo(() => {
+    if (!showingLiveUploads) {
+      return results;
+    }
+
+    return mergeDocuments(newItems, results).slice(0, PAGE_SIZE);
+  }, [newItems, results, showingLiveUploads]);
+
+  const displayedTotal = useMemo(() => {
+    if (total === null) {
+      return null;
+    }
+
+    if (!showingLiveUploads) {
+      return total;
+    }
+
+    const fetchedIds = new Set(results.map((doc) => doc.id));
+    const localOnlyCount = newItems.reduce(
+      (count, doc) => count + (fetchedIds.has(doc.id) ? 0 : 1),
+      0,
+    );
+
+    return total + localOnlyCount;
+  }, [newItems, results, showingLiveUploads, total]);
+
+  const totalPages =
+    displayedTotal !== null ? Math.ceil(displayedTotal / PAGE_SIZE) : null;
+
+  const handleDelete = useCallback(
+    (id: string) => {
+      setResults((prev: ArchiveDocument[]) =>
+        prev.filter((doc: ArchiveDocument) => doc.id !== id),
+      );
+      setTotal((prev: number | null) =>
+        prev === null ? null : Math.max(prev - 1, 0),
+      );
+      onDeleted(id);
+    },
+    [onDeleted],
+  );
 
   return (
     <section className="search">
@@ -138,22 +195,22 @@ export default function SearchView({ newItems, onDeleted }: Props) {
         </button>
       </form>
 
-      {total !== null && (
+      {displayedTotal !== null && (
         <p className="search__meta">
-          {total === 0 ? (
+          {displayedTotal === 0 ? (
             "No results"
           ) : query.trim() ? (
             <>
-              {total} result{total === 1 ? "" : "s"} for{" "}
+              {displayedTotal} result{displayedTotal === 1 ? "" : "s"} for{" "}
               <strong>"{query}"</strong>
             </>
           ) : (
-            `${total} document${total === 1 ? "" : "s"} in the archive`
+            `${displayedTotal} document${displayedTotal === 1 ? "" : "s"} in the archive`
           )}
         </p>
       )}
 
-      {total === 0 && !loading && (
+      {displayedTotal === 0 && !loading && (
         <div className="search__empty">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
@@ -171,11 +228,11 @@ export default function SearchView({ newItems, onDeleted }: Props) {
         </div>
       )}
 
-      {results.length > 0 && (
+      {displayedResults.length > 0 && (
         <ul className="search__results">
-          {results.map((doc) => (
+          {displayedResults.map((doc) => (
             <li key={doc.id}>
-              <ArchiveCard doc={doc} onDeleted={onDeleted} />
+              <ArchiveCard doc={doc} onDeleted={handleDelete} />
             </li>
           ))}
         </ul>

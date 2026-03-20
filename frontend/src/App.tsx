@@ -1,22 +1,108 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import ArchiveCapture from "./components/ArchiveCapture";
 import SearchView from "./components/SearchView";
 import type { ArchiveDocument } from "./types";
 
+type ToastKind = "success" | "error";
+
+interface Toast {
+  id: number;
+  kind: ToastKind;
+  message: string;
+}
+
 function App() {
   const [archived, setArchived] = useState<ArchiveDocument[]>([]);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const nextToastId = useRef(1);
+  const toastTimeouts = useRef(new Map<number, ReturnType<typeof setTimeout>>());
 
-  const handleArchived = (doc: ArchiveDocument) => {
-    setArchived((prev) => [doc, ...prev]);
-  };
+  const dismissToast = useCallback((id: number) => {
+    const timeout = toastTimeouts.current.get(id);
+    if (timeout) {
+      clearTimeout(timeout);
+      toastTimeouts.current.delete(id);
+    }
 
-  const handleDeleted = (id: string) => {
-    setArchived((prev) => prev.filter((d) => d.id !== id));
-  };
+    setToasts((prev: Toast[]) => prev.filter((toast: Toast) => toast.id !== id));
+  }, []);
+
+  const showToast = useCallback(
+    (kind: ToastKind, message: string) => {
+      const id = nextToastId.current++;
+      setToasts((prev: Toast[]) => [...prev, { id, kind, message }]);
+
+      const timeout = setTimeout(() => {
+        dismissToast(id);
+      }, 4000);
+
+      toastTimeouts.current.set(id, timeout);
+    },
+    [dismissToast],
+  );
+
+  useEffect(() => {
+    return () => {
+      toastTimeouts.current.forEach((timeout: ReturnType<typeof setTimeout>) =>
+        clearTimeout(timeout),
+      );
+      toastTimeouts.current.clear();
+    };
+  }, []);
+
+  const handleArchived = useCallback((doc: ArchiveDocument) => {
+    setArchived((prev: ArchiveDocument[]) => [
+      doc,
+      ...prev.filter((item: ArchiveDocument) => item.id !== doc.id),
+    ]);
+  }, []);
+
+  const handleDeleted = useCallback((id: string) => {
+    setArchived((prev: ArchiveDocument[]) =>
+      prev.filter((doc: ArchiveDocument) => doc.id !== id),
+    );
+  }, []);
+
+  const handleUploadSuccess = useCallback(
+    (message: string) => showToast("success", message),
+    [showToast],
+  );
+
+  const handleUploadError = useCallback(
+    (message: string) => showToast("error", message),
+    [showToast],
+  );
 
   return (
     <div className="app">
+      {toasts.length > 0 && (
+        <div className="toast-stack" aria-live="polite" aria-atomic="true">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`toast toast--${toast.kind}`}
+              role={toast.kind === "error" ? "alert" : "status"}
+            >
+              <div className="toast__body">
+                <strong className="toast__title">
+                  {toast.kind === "success" ? "Upload complete" : "Upload failed"}
+                </strong>
+                <p className="toast__message">{toast.message}</p>
+              </div>
+              <button
+                type="button"
+                className="toast__close"
+                onClick={() => dismissToast(toast.id)}
+                aria-label="Dismiss notification"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <header className="app__hero">
         <div className="app__hero-inner">
           <div className="app__logo" aria-hidden="true">
@@ -66,7 +152,11 @@ function App() {
             </svg>
             Capture
           </h2>
-          <ArchiveCapture onArchived={handleArchived} />
+          <ArchiveCapture
+            onArchived={handleArchived}
+            onUploadSuccess={handleUploadSuccess}
+            onUploadError={handleUploadError}
+          />
         </div>
 
         <div className="app__panel app__panel--search">

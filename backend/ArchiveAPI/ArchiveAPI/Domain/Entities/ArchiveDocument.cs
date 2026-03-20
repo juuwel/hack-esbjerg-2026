@@ -49,6 +49,12 @@ public class ArchiveDocument
     /// <summary>Searchable tags.</summary>
     public List<string> Tags { get; set; } = [];
 
+    /// <summary>Short AI-generated description for image uploads.</summary>
+    public string? AiDescription { get; set; }
+
+    /// <summary>Raw AI-generated tags for image uploads.</summary>
+    public List<string> AiTags { get; set; } = [];
+
     // ── Geographic & community ─────────────────────────────────────────────────
 
     /// <summary>City, region, or free-text location.</summary>

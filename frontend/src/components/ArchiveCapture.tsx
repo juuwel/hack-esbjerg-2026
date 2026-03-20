@@ -1,8 +1,27 @@
-import { useCallback, useRef, useState } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import type { ArchiveDocument, UploadArchiveRequest } from "../types";
 
 interface Props {
   onArchived: (doc: ArchiveDocument) => void;
+  onUploadSuccess: (message: string) => void;
+  onUploadError: (message: string) => void;
+}
+
+interface UploadResponse {
+  documentId: string;
+  objectName?: string;
+  fileName?: string;
+  contentType?: string;
+  size?: number;
+  format?: string;
 }
 
 const PLATFORMS = [
@@ -165,7 +184,91 @@ function deriveMetadata(file: File): Partial<UploadArchiveRequest> {
   return derived;
 }
 
-export default function ArchiveCapture({ onArchived }: Props) {
+function parseTags(raw?: string): string[] {
+  return raw
+    ? raw
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function buildOptimisticDocument(
+  file: File,
+  meta: UploadArchiveRequest,
+  upload: UploadResponse,
+): ArchiveDocument {
+  const extension = file.name.includes(".")
+    ? `.${file.name.split(".").pop() ?? ""}`
+    : "";
+
+  return {
+    id: upload.documentId,
+    title: meta.title || fileNameToTitle(file.name),
+    content: undefined,
+    sourceUrl: meta.sourceUrl,
+    sourcePlatform: meta.sourcePlatform,
+    author: meta.author,
+    archivedBy: meta.archivedBy,
+    capturedAt: new Date().toISOString(),
+    originalCreatedAt: meta.originalCreatedAt || undefined,
+    contentType: meta.contentType,
+    format: upload.format || file.name.split(".").pop()?.toUpperCase(),
+    language: meta.language,
+    tags: parseTags(meta.tags),
+    aiDescription: undefined,
+    aiTags: undefined,
+    location: meta.location,
+    community: meta.community,
+    historicalContext: meta.historicalContext,
+    connectedIds: [],
+    checksumSha256: undefined,
+    migrationHistory: [],
+    objectName: upload.objectName,
+    metadata: {
+      fileName: upload.fileName || file.name,
+      mimeType: upload.contentType || file.type || "application/octet-stream",
+      sizeBytes: String(upload.size ?? file.size),
+      extension,
+    },
+  };
+}
+
+async function wait(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchDocumentWithRetry(
+  documentId: string,
+  attempts = 4,
+): Promise<ArchiveDocument | null> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(`/api/archive/documents/${documentId}`);
+      if (response.ok) {
+        return (await response.json()) as ArchiveDocument;
+      }
+
+      if (response.status !== 404 || attempt === attempts - 1) {
+        return null;
+      }
+    } catch {
+      if (attempt === attempts - 1) {
+        return null;
+      }
+    }
+
+    await wait(350 * (attempt + 1));
+  }
+
+  return null;
+}
+
+export default function ArchiveCapture({
+  onArchived,
+  onUploadSuccess,
+  onUploadError,
+}: Props) {
   const [step, setStep] = useState<"file" | "meta">("file");
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -180,7 +283,7 @@ export default function ArchiveCapture({ onArchived }: Props) {
   const handleFilePick = useCallback((picked: File) => {
     setFile(picked);
     const derived = deriveMetadata(picked);
-    setMeta((m) => ({
+    setMeta((m: UploadArchiveRequest) => ({
       ...empty,
       ...derived,
       // Preserve any fields the user has already manually filled
@@ -192,7 +295,7 @@ export default function ArchiveCapture({ onArchived }: Props) {
     setStep("meta");
   }, []);
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setDragOver(false);
     const f = e.dataTransfer.files?.[0];
@@ -202,19 +305,17 @@ export default function ArchiveCapture({ onArchived }: Props) {
   const set =
     (key: keyof UploadArchiveRequest) =>
     (
-      e: React.ChangeEvent<
-        HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
-      >,
+      e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
     ) => {
-      setMeta((m) => ({ ...m, [key]: e.target.value }));
-      setDerivedKeys((prev) => {
+      setMeta((m: UploadArchiveRequest) => ({ ...m, [key]: e.target.value }));
+      setDerivedKeys((prev: Set<keyof UploadArchiveRequest>) => {
         const next = new Set(prev);
         next.delete(key);
         return next;
       });
     };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!file) return;
     setSubmitting(true);
@@ -222,8 +323,10 @@ export default function ArchiveCapture({ onArchived }: Props) {
 
     const form = new FormData();
     form.append("file", file);
-    Object.entries(meta).forEach(([k, v]) => {
-      if (v) form.append(k, v);
+    Object.entries(meta).forEach(([k, v]: [string, string | undefined]) => {
+      if (typeof v === "string" && v) {
+        form.append(k, v);
+      }
     });
 
     try {
@@ -235,17 +338,29 @@ export default function ArchiveCapture({ onArchived }: Props) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `Upload failed (${res.status})`);
       }
-      const data = await res.json();
-      // Fetch the full document so we can show it in the results
-      const docRes = await fetch(`/api/archive/documents/${data.documentId}`);
-      const doc: ArchiveDocument = await docRes.json();
-      onArchived(doc);
+      const data: UploadResponse = await res.json();
+      const optimisticDoc = buildOptimisticDocument(file, meta, data);
+
+      onArchived(optimisticDoc);
+      onUploadSuccess(
+        `“${optimisticDoc.title ?? data.fileName ?? file.name}” was uploaded successfully.`,
+      );
+
+      void (async () => {
+        const hydratedDoc = await fetchDocumentWithRetry(data.documentId);
+        if (hydratedDoc) {
+          onArchived(hydratedDoc);
+        }
+      })();
+
       // Reset
       setFile(null);
       setMeta(empty);
       setStep("file");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setError(message);
+      onUploadError(message);
     } finally {
       setSubmitting(false);
     }
@@ -262,7 +377,7 @@ export default function ArchiveCapture({ onArchived }: Props) {
         <div
           className={`capture__drop${dragOver ? " capture__drop--over" : ""}`}
           onClick={() => inputRef.current?.click()}
-          onDragOver={(e) => {
+          onDragOver={(e: DragEvent<HTMLDivElement>) => {
             e.preventDefault();
             setDragOver(true);
           }}
@@ -271,13 +386,15 @@ export default function ArchiveCapture({ onArchived }: Props) {
           role="button"
           tabIndex={0}
           aria-label="Choose a file to archive"
-          onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
+          onKeyDown={(e: KeyboardEvent<HTMLDivElement>) =>
+            e.key === "Enter" && inputRef.current?.click()
+          }
         >
           <input
             ref={inputRef}
             type="file"
             style={{ display: "none" }}
-            onChange={(e) => {
+            onChange={(e: ChangeEvent<HTMLInputElement>) => {
               const f = e.target.files?.[0];
               if (f) handleFilePick(f);
               e.target.value = "";

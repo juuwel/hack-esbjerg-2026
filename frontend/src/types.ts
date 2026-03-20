@@ -18,6 +18,8 @@ export interface ArchiveDocument {
     format?: string;
     language?: string;
     tags: string[];
+    aiDescription?: string;
+    aiTags?: string[];
 
     // Geographic & community
     location?: string;
