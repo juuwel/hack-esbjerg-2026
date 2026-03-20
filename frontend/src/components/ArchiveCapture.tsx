@@ -24,6 +24,9 @@ interface UploadResponse {
   format?: string;
 }
 
+type AutofillSource = "heuristic" | "image";
+type AutofillSourceMap = Partial<Record<keyof UploadArchiveRequest, AutofillSource>>;
+
 const PLATFORMS = [
   "Twitter / X",
   "Facebook",
@@ -59,6 +62,23 @@ const LANGUAGES = [
   { code: "fr", label: "French" },
   { code: "es", label: "Spanish" },
 ];
+
+const SUPPORTED_LANGUAGE_CODES = new Set(LANGUAGES.map((entry) => entry.code));
+
+const FIELD_LABELS: Record<keyof UploadArchiveRequest, string> = {
+  title: "title",
+  sourceUrl: "original URL",
+  sourcePlatform: "platform",
+  author: "author",
+  archivedBy: "archived by",
+  contentType: "content type",
+  language: "language",
+  tags: "tags",
+  location: "location",
+  community: "community",
+  historicalContext: "historical context",
+  originalCreatedAt: "original date",
+};
 
 const empty: UploadArchiveRequest = {
   title: "",
@@ -184,6 +204,269 @@ function deriveMetadata(file: File): Partial<UploadArchiveRequest> {
   return derived;
 }
 
+function buildAutofillSourceMap(
+  keys: (keyof UploadArchiveRequest)[],
+  source: AutofillSource,
+): AutofillSourceMap {
+  return keys.reduce<AutofillSourceMap>((acc, key) => {
+    acc[key] = source;
+    return acc;
+  }, {});
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string") {
+      const normalized = value.replace(/\0/g, "").trim();
+      if (normalized) return normalized;
+    }
+
+    if (Array.isArray(value)) {
+      const nested = firstText(...value);
+      if (nested) return nested;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeMetadataDate(value: unknown): string | undefined {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return toDatetimeLocal(value);
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().replace(/^([0-9]{4}):([0-9]{2}):([0-9]{2})/, "$1-$2-$3");
+    const parsed = new Date(normalized);
+    if (!Number.isNaN(parsed.getTime())) {
+      return toDatetimeLocal(parsed);
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeKeywords(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value
+      .split(/[;,|]/)
+      .map((entry) => entry.replace(/\0/g, "").trim())
+      .filter(Boolean);
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => normalizeKeywords(entry));
+  }
+
+  return [];
+}
+
+function dedupeText(values: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+
+  for (const value of values) {
+    const normalized = value.trim();
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(normalized);
+  }
+
+  return deduped;
+}
+
+function normalizeLanguage(value: unknown): string | undefined {
+  const raw = firstText(value);
+  if (!raw) return undefined;
+
+  const normalized = raw.toLowerCase().trim();
+  const candidate = normalized.includes("-") ? normalized.split("-")[0] : normalized;
+  return SUPPORTED_LANGUAGE_CODES.has(candidate) ? candidate : undefined;
+}
+
+function formatGpsLocation(latitude: unknown, longitude: unknown): string | undefined {
+  if (typeof latitude !== "number" || typeof longitude !== "number") {
+    return undefined;
+  }
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return undefined;
+  }
+
+  return `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+}
+
+async function deriveImageMetadata(file: File): Promise<Partial<UploadArchiveRequest>> {
+  if (!file.type.startsWith("image/")) {
+    return {};
+  }
+
+  try {
+    const exifr = await import("exifr");
+    const parsed = await exifr.parse(file, {
+      tiff: true,
+      exif: true,
+      gps: true,
+      iptc: true,
+      xmp: true,
+      icc: false,
+      jfif: false,
+      pick: [
+        "DateTimeOriginal",
+        "CreateDate",
+        "ModifyDate",
+        "DateCreated",
+        "Artist",
+        "Creator",
+        "Byline",
+        "XPAuthor",
+        "XPTitle",
+        "ImageDescription",
+        "ObjectName",
+        "Headline",
+        "Title",
+        "Caption",
+        "CaptionAbstract",
+        "Description",
+        "UserComment",
+        "XPComment",
+        "Keywords",
+        "XPKeywords",
+        "Subject",
+        "XPSubject",
+        "LanguageIdentifier",
+        "LanguageCode",
+        "City",
+        "SubLocation",
+        "ProvinceState",
+        "State",
+        "Country",
+        "CountryPrimaryLocationName",
+        "GPSLatitude",
+        "GPSLongitude",
+      ],
+    });
+
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+
+    const metadata = parsed as Record<string, unknown>;
+    const derived: Partial<UploadArchiveRequest> = {};
+
+    const title = firstText(
+      metadata.XPTitle,
+      metadata.ObjectName,
+      metadata.Headline,
+      metadata.Title,
+      metadata.ImageDescription,
+    );
+    const author = firstText(
+      metadata.Artist,
+      metadata.Creator,
+      metadata.Byline,
+      metadata.XPAuthor,
+    );
+    const originalCreatedAt = normalizeMetadataDate(
+      metadata.DateTimeOriginal ??
+        metadata.CreateDate ??
+        metadata.DateCreated ??
+        metadata.ModifyDate,
+    );
+
+    const keywordTags = dedupeText([
+      ...normalizeKeywords(metadata.Keywords),
+      ...normalizeKeywords(metadata.XPKeywords),
+      ...normalizeKeywords(metadata.Subject),
+      ...normalizeKeywords(metadata.XPSubject),
+    ]);
+
+    const descriptiveText = firstText(
+      metadata.Caption,
+      metadata.CaptionAbstract,
+      metadata.Description,
+      metadata.UserComment,
+      metadata.XPComment,
+      metadata.ImageDescription,
+    );
+
+    const textualLocation = dedupeText(
+      [
+        firstText(metadata.SubLocation),
+        firstText(metadata.City),
+        firstText(metadata.ProvinceState, metadata.State),
+        firstText(metadata.CountryPrimaryLocationName, metadata.Country),
+      ].filter((value): value is string => Boolean(value)),
+    ).join(", ");
+
+    const location =
+      textualLocation || formatGpsLocation(metadata.GPSLatitude, metadata.GPSLongitude);
+
+    if (title) derived.title = title;
+    if (author) derived.author = author;
+    if (originalCreatedAt) derived.originalCreatedAt = originalCreatedAt;
+    if (location) derived.location = location;
+    if (keywordTags.length > 0) derived.tags = keywordTags.join(", ");
+
+    const language = normalizeLanguage(
+      metadata.LanguageIdentifier ?? metadata.LanguageCode,
+    );
+    if (language) derived.language = language;
+
+    if (descriptiveText && descriptiveText !== title) {
+      derived.historicalContext = descriptiveText;
+    }
+
+    return derived;
+  } catch {
+    return {};
+  }
+}
+
+function applyDerivedMetadata(
+  current: UploadArchiveRequest,
+  incoming: Partial<UploadArchiveRequest>,
+  currentSources: AutofillSourceMap,
+) {
+  const next: UploadArchiveRequest = { ...current };
+  const appliedKeys = new Set<keyof UploadArchiveRequest>();
+
+  for (const [rawKey, rawValue] of Object.entries(incoming) as [
+    keyof UploadArchiveRequest,
+    string | undefined,
+  ][]) {
+    const value = rawValue?.trim();
+    if (!value) continue;
+
+    if (rawKey === "tags") {
+      const incomingTags = parseTags(value);
+      const existingTags = parseTags(next.tags);
+      const canApply = !next.tags || currentSources.tags !== undefined;
+
+      if (!canApply) continue;
+
+      const mergedTags = dedupeText([...existingTags, ...incomingTags]);
+      if (mergedTags.length > 0) {
+        next.tags = mergedTags.join(", ");
+        appliedKeys.add("tags");
+      }
+      continue;
+    }
+
+    const currentValue = next[rawKey]?.trim();
+    const canApply = !currentValue || currentSources[rawKey] !== undefined;
+
+    if (!canApply) continue;
+    if (currentValue === value) continue;
+
+    next[rawKey] = value;
+    appliedKeys.add(rawKey);
+  }
+
+  return { next, appliedKeys };
+}
+
 function parseTags(raw?: string): string[] {
   return raw
     ? raw
@@ -273,14 +556,19 @@ export default function ArchiveCapture({
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [meta, setMeta] = useState<UploadArchiveRequest>(empty);
-  const [derivedKeys, setDerivedKeys] = useState<
-    Set<keyof UploadArchiveRequest>
-  >(new Set());
+  const [autofillSources, setAutofillSources] = useState<AutofillSourceMap>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const metadataRequestIdRef = useRef(0);
+  const metaRef = useRef(meta);
+  const autofillSourcesRef = useRef(autofillSources);
+
+  metaRef.current = meta;
+  autofillSourcesRef.current = autofillSources;
 
   const handleFilePick = useCallback((picked: File) => {
+    const metadataRequestId = ++metadataRequestIdRef.current;
     setFile(picked);
     const derived = deriveMetadata(picked);
     setMeta((m: UploadArchiveRequest) => ({
@@ -289,10 +577,45 @@ export default function ArchiveCapture({
       // Preserve any fields the user has already manually filled
       ...(m.archivedBy ? { archivedBy: m.archivedBy } : {}),
     }));
-    setDerivedKeys(
-      new Set(Object.keys(derived) as (keyof UploadArchiveRequest)[]),
+    setAutofillSources(
+      buildAutofillSourceMap(
+        Object.keys(derived) as (keyof UploadArchiveRequest)[],
+        "heuristic",
+      ),
     );
     setStep("meta");
+
+    if (picked.type.startsWith("image/")) {
+      void (async () => {
+        const imageDerived = await deriveImageMetadata(picked);
+        if (metadataRequestIdRef.current !== metadataRequestId) {
+          return;
+        }
+
+        if (Object.keys(imageDerived).length === 0) {
+          return;
+        }
+
+        const { next, appliedKeys } = applyDerivedMetadata(
+          metaRef.current,
+          imageDerived,
+          autofillSourcesRef.current,
+        );
+
+        if (appliedKeys.size === 0) {
+          return;
+        }
+
+        setMeta(next);
+        setAutofillSources((prev: AutofillSourceMap) => {
+          const merged = { ...prev };
+          appliedKeys.forEach((key) => {
+            merged[key] = "image";
+          });
+          return merged;
+        });
+      })();
+    }
   }, []);
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -308,9 +631,9 @@ export default function ArchiveCapture({
       e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
     ) => {
       setMeta((m: UploadArchiveRequest) => ({ ...m, [key]: e.target.value }));
-      setDerivedKeys((prev: Set<keyof UploadArchiveRequest>) => {
-        const next = new Set(prev);
-        next.delete(key);
+      setAutofillSources((prev: AutofillSourceMap) => {
+        const next = { ...prev };
+        delete next[key];
         return next;
       });
     };
@@ -323,7 +646,7 @@ export default function ArchiveCapture({
 
     const form = new FormData();
     form.append("file", file);
-    Object.entries(meta).forEach(([k, v]: [string, string | undefined]) => {
+    Object.entries(meta as Record<string, string | undefined>).forEach(([k, v]) => {
       if (typeof v === "string" && v) {
         form.append(k, v);
       }
@@ -356,6 +679,7 @@ export default function ArchiveCapture({
       // Reset
       setFile(null);
       setMeta(empty);
+      setAutofillSources({});
       setStep("file");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -366,10 +690,23 @@ export default function ArchiveCapture({
     }
   };
 
-  const autoBadge = (key: keyof UploadArchiveRequest) =>
-    derivedKeys.has(key) ? (
-      <span className="capture__auto-badge">auto</span>
-    ) : null;
+  const autoBadge = (key: keyof UploadArchiveRequest) => {
+    const source = autofillSources[key];
+    if (!source) return null;
+
+    return (
+      <span className={`capture__auto-badge capture__auto-badge--${source}`}>
+        {source === "image" ? "metadata" : "file"}
+      </span>
+    );
+  };
+
+  const imageAutofillFields = (Object.entries(autofillSources) as [
+    keyof UploadArchiveRequest,
+    AutofillSource | undefined,
+  ][])
+    .filter(([, source]) => source === "image")
+    .map(([key]) => FIELD_LABELS[key]);
 
   return (
     <div className="capture">
@@ -451,6 +788,12 @@ export default function ArchiveCapture({
               ✕
             </button>
           </div>
+
+          {imageAutofillFields.length > 0 && (
+            <div className="capture__meta-summary" role="status">
+              Image metadata filled: {imageAutofillFields.join(", ")}
+            </div>
+          )}
 
           <fieldset className="capture__fieldset">
             <legend className="capture__legend">Core</legend>
